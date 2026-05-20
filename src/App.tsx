@@ -491,6 +491,7 @@ export default function App() {
 
   // Crossfader state
   const [crossfader, setCrossfader] = useState(0.5); // 0 to 1
+  const [xfCurve, setXfCurve] = useState<'linear' | 'cut' | 'slope'>('slope');
 
   // Decks Management
   const [deckA, setDeckA] = useState<DeckState>({ id: 'A', isPlaying: false, trackName: '', playbackRate: 1, bend: 0, gain: 0.8, low: 0, mid: 0, high: 0, bpm: 128, baseBpm: 128, cuePoint: 0, hotCues: [null, null, null, null], isAnalyzing: false, syncLocked: false, isMaster: false, key: '8A', pitchCurve: 'linear', loopStart: null, loopEnd: null, isLooping: false, structureMarkers: [], fxReverb: 0, fxDelay: 0, filterKnob: 0.5 });
@@ -1323,9 +1324,8 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
         const chain = createDeckChain(id);
         if (chain) {
           (nodeRef.current as any) = chain;
-          // Apply initial crossfader value to prevent "dead" crossfader until moved
-          const gA = Math.cos(crossfader * 0.5 * Math.PI);
-          const gB = Math.cos((1 - crossfader) * 0.5 * Math.PI);
+          // Apply initial crossfader value (respects selected curve)
+          const [gA, gB] = getCrossfaderGains(crossfader);
           if (id === 'A' && chain.crossGain) chain.crossGain.gain.value = gA;
           if (id === 'B' && chain.crossGain) chain.crossGain.gain.value = gB;
         }
@@ -1834,15 +1834,37 @@ Responde SOLO con este JSON (sin markdown):
     setDeckB(prev => ({ ...prev, bpm: Math.round(prev.baseBpm * (prev.playbackRate + prev.bend) * 10) / 10 }));
   }, [deckB.playbackRate, deckB.bend, deckB.baseBpm]);
 
-  // Crossfader Logic: Equal Power Curve
-  useEffect(() => {
-    if (nodesA.current.crossGain && nodesB.current.crossGain) {
-      const gA = Math.cos(crossfader * 0.5 * Math.PI);
-      const gB = Math.cos((1 - crossfader) * 0.5 * Math.PI);
-      nodesA.current.crossGain.gain.setTargetAtTime(gA, audioCtx.current!.currentTime, 0.05);
-      nodesB.current.crossGain.gain.setTargetAtTime(gB, audioCtx.current!.currentTime, 0.05);
+  // Crossfader curve helper — returns [gainA, gainB] for position x ∈ [0,1]
+  const getCrossfaderGains = useCallback((x: number): [number, number] => {
+    switch (xfCurve) {
+      case 'linear':
+        return [1 - x, x];
+      case 'slope': {
+        // Equal-power cosine — smooth, both audible across full travel
+        return [Math.cos(x * 0.5 * Math.PI), Math.cos((1 - x) * 0.5 * Math.PI)];
+      }
+      case 'cut': {
+        // Hard cut: full signal until 10% from centre, then sharp drop
+        const w = 0.08;
+        const gA = x < (0.5 - w) ? 1
+          : x > (0.5 + w) ? 0
+          : Math.cos(((x - (0.5 - w)) / (2 * w)) * Math.PI * 0.5);
+        const gB = x > (0.5 + w) ? 1
+          : x < (0.5 - w) ? 0
+          : Math.cos((((0.5 + w) - x) / (2 * w)) * Math.PI * 0.5);
+        return [gA, gB];
+      }
     }
-  }, [crossfader]);
+  }, [xfCurve]);
+
+  // Crossfader Logic — applies selected curve
+  useEffect(() => {
+    if (nodesA.current.crossGain && nodesB.current.crossGain && audioCtx.current) {
+      const [gA, gB] = getCrossfaderGains(crossfader);
+      nodesA.current.crossGain.gain.setTargetAtTime(gA, audioCtx.current.currentTime, 0.05);
+      nodesB.current.crossGain.gain.setTargetAtTime(gB, audioCtx.current.currentTime, 0.05);
+    }
+  }, [crossfader, getCrossfaderGains]);
 
   // FX Delay/Reverb for Deck A
   useEffect(() => {
@@ -2410,7 +2432,7 @@ Responde SOLO con este JSON (sin markdown):
                   <span className="text-[#ffcc00]">B</span>
                 </div>
                 <div className="relative h-10 w-full flex items-center px-4 mt-2">
-                  <input 
+                  <input
                     type="range"
                     min="0"
                     max="1"
@@ -2419,6 +2441,32 @@ Responde SOLO con este JSON (sin markdown):
                     onChange={(e) => setCrossfader(parseFloat(e.target.value))}
                     className="neumorphic-slider w-full cursor-pointer"
                   />
+                </div>
+                {/* Crossfader Curve Selector */}
+                <div className="flex items-center gap-1 px-3 mt-1">
+                  <span className="text-[7px] font-bold opacity-30 uppercase tracking-widest mr-1">CURVE</span>
+                  {(['linear', 'slope', 'cut'] as const).map(c => (
+                    <button
+                      key={c}
+                      onClick={() => setXfCurve(c)}
+                      className={`flex-1 h-6 rounded-sm border text-[7px] font-black uppercase tracking-wider transition-all ${
+                        xfCurve === c
+                          ? c === 'cut'
+                            ? 'bg-red-500/30 border-red-400 text-red-300 shadow-[0_0_8px_rgba(239,68,68,0.3)]'
+                            : c === 'slope'
+                            ? 'bg-[#39ff14]/20 border-[#39ff14] text-[#39ff14] shadow-[0_0_8px_rgba(57,255,20,0.2)]'
+                            : 'bg-white/15 border-white/40 text-white'
+                          : 'bg-white/5 border-white/10 text-white/30 hover:bg-white/10 hover:text-white/50'
+                      }`}
+                      title={
+                        c === 'linear' ? 'Fade lineal — mezcla clásica de cabina'
+                        : c === 'slope' ? 'Equal-power — mezclas suaves, ambos canales audibles'
+                        : 'Cut — señal completa hasta el centro, corte brusco (scratch)'
+                      }
+                    >
+                      {c === 'linear' ? 'LIN' : c === 'slope' ? 'EQP' : 'CUT'}
+                    </button>
+                  ))}
                 </div>
               </div>
             </div>
