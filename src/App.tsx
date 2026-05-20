@@ -10,6 +10,7 @@ import { Play, Pause, Square, Radio, SkipBack, Download, Headphones, Mic2, Save 
 import { motion, AnimatePresence } from 'motion/react';
 import { analyze } from 'web-audio-beat-detector';
 import { analyzeAudioAdvanced, analyzeChordMap, findBestHarmonicMixPoints, type ChordSegment, type HarmonicMixPoint } from './webgpu-analyzer';
+import { PitchShifter } from 'soundtouchjs';
 
 // AI client created once at module level (avoids re-instantiation on every render)
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
@@ -370,6 +371,7 @@ interface DeckState {
   fxReverb: number;  // 0-1 wet amount
   fxDelay: number;   // 0-1 wet amount
   filterKnob: number;  // 0..1 — 0.5=bypass, <0.5=LPF sweep, >0.5=HPF sweep
+  keyLock: boolean;  // When true: tempo changes do not affect pitch (WSOLA via soundtouchjs)
 }
 
 // Harmonic Compatibility (Camelot Wheel)
@@ -494,8 +496,8 @@ export default function App() {
   const [xfCurve, setXfCurve] = useState<'linear' | 'cut' | 'slope'>('slope');
 
   // Decks Management
-  const [deckA, setDeckA] = useState<DeckState>({ id: 'A', isPlaying: false, trackName: '', playbackRate: 1, bend: 0, gain: 0.8, low: 0, mid: 0, high: 0, bpm: 128, baseBpm: 128, cuePoint: 0, hotCues: [null, null, null, null], isAnalyzing: false, syncLocked: false, isMaster: false, key: '8A', pitchCurve: 'linear', loopStart: null, loopEnd: null, isLooping: false, structureMarkers: [], fxReverb: 0, fxDelay: 0, filterKnob: 0.5 });
-  const [deckB, setDeckB] = useState<DeckState>({ id: 'B', isPlaying: false, trackName: '', playbackRate: 1, bend: 0, gain: 0.8, low: 0, mid: 0, high: 0, bpm: 128, baseBpm: 128, cuePoint: 0, hotCues: [null, null, null, null], isAnalyzing: false, syncLocked: false, isMaster: false, key: '3B', pitchCurve: 'linear', loopStart: null, loopEnd: null, isLooping: false, structureMarkers: [], fxReverb: 0, fxDelay: 0, filterKnob: 0.5 });
+  const [deckA, setDeckA] = useState<DeckState>({ id: 'A', isPlaying: false, trackName: '', playbackRate: 1, bend: 0, gain: 0.8, low: 0, mid: 0, high: 0, bpm: 128, baseBpm: 128, cuePoint: 0, hotCues: [null, null, null, null], isAnalyzing: false, syncLocked: false, isMaster: false, key: '8A', pitchCurve: 'linear', loopStart: null, loopEnd: null, isLooping: false, structureMarkers: [], fxReverb: 0, fxDelay: 0, filterKnob: 0.5, keyLock: false });
+  const [deckB, setDeckB] = useState<DeckState>({ id: 'B', isPlaying: false, trackName: '', playbackRate: 1, bend: 0, gain: 0.8, low: 0, mid: 0, high: 0, bpm: 128, baseBpm: 128, cuePoint: 0, hotCues: [null, null, null, null], isAnalyzing: false, syncLocked: false, isMaster: false, key: '3B', pitchCurve: 'linear', loopStart: null, loopEnd: null, isLooping: false, structureMarkers: [], fxReverb: 0, fxDelay: 0, filterKnob: 0.5, keyLock: false });
   const [isAiMixing, setIsAiMixing] = useState(false);
 
   // Poll RAM (Chrome performance.memory) + estimate GPU load
@@ -842,6 +844,8 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
   }>({ source: null, analyser: null, gain: null, crossGain: null, filters: [], highPass: null,
        djFilter: null, delayNode: null, delayWet: null, delayFeedback: null, reverbNode: null, reverbWet: null });
   const buffers = useRef<{ A: AudioBuffer | null, B: AudioBuffer | null }>({ A: null, B: null });
+  const stShifterA = useRef<PitchShifter | null>(null);
+  const stShifterB = useRef<PitchShifter | null>(null);
 
   // --- AUDIO SETUP ---
   const masterAnalyser = useRef<AnalyserNode | null>(null);
@@ -1287,13 +1291,20 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
     const startTimeRef = id === 'A' ? playStartTimeA : playStartTimeB;
     const nodeRef = id === 'A' ? nodesA : nodesB;
     const state = id === 'A' ? deckA : deckB;
+    const stRef = id === 'A' ? stShifterA : stShifterB;
 
-    if (audioCtx.current && nodeRef.current.source) {
+    if (stRef.current && audioCtx.current) {
+      // SoundTouch (Key Lock) mode: track position from elapsed wall-clock time × tempo
+      const elapsed = (audioCtx.current.currentTime - startTimeRef.current) * (state.playbackRate + state.bend);
+      offsetRef.current = Math.min(offsetRef.current + elapsed, (buffers.current[id]?.duration || 999) - 0.01);
+      stRef.current.disconnect();
+      stRef.current = null;
+    } else if (audioCtx.current && nodeRef.current.source) {
       const elapsed = (audioCtx.current.currentTime - startTimeRef.current) * (state.playbackRate + state.bend);
       offsetRef.current += elapsed;
       try {
         const s = nodeRef.current.source;
-        s.onended = null; // Prevent race condition with old onended setting isPlaying false
+        s.onended = null;
         s.stop();
         s.disconnect();
       } catch (e) {
@@ -1309,33 +1320,66 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
     const offsetRef = id === 'A' ? offsetA : offsetB;
     const startTimeRef = id === 'A' ? playStartTimeA : playStartTimeB;
     const nodeRef = id === 'A' ? nodesA : nodesB;
-    const state = id === 'A' ? deckA : deckB;
+    const stRef = id === 'A' ? stShifterA : stShifterB;
+    // Use ref for latest state (avoids stale closure in callbacks)
+    const state = id === 'A' ? deckRefA.current : deckRefB.current;
 
-    // Source of truth: Is there already a source running?
-    if (nodeRef.current.source) return;
+    // Guard: already playing in either mode
+    if (nodeRef.current.source || stRef.current) return;
     if (!audioCtx.current || !buffers.current[id]) return;
-      // If we start playing normally, we are no longer "cueing" (momentary mode)
-      if (id === 'A') isCueingA.current = false;
-      else isCueingB.current = false;
 
-      if (offsetRef.current >= buffers.current[id]!.duration) offsetRef.current = 0;
-      
-      if (!nodeRef.current.gain) {
-        const chain = createDeckChain(id);
-        if (chain) {
-          (nodeRef.current as any) = chain;
-          // Apply initial crossfader value (respects selected curve)
-          const [gA, gB] = getCrossfaderGains(crossfader);
-          if (id === 'A' && chain.crossGain) chain.crossGain.gain.value = gA;
-          if (id === 'B' && chain.crossGain) chain.crossGain.gain.value = gB;
-        }
+    if (id === 'A') isCueingA.current = false;
+    else isCueingB.current = false;
+
+    if (offsetRef.current >= buffers.current[id]!.duration) offsetRef.current = 0;
+
+    if (!nodeRef.current.gain) {
+      const chain = createDeckChain(id);
+      if (chain) {
+        (nodeRef.current as any) = chain;
+        const [gA, gB] = getCrossfaderGains(crossfader);
+        if (id === 'A' && chain.crossGain) chain.crossGain.gain.value = gA;
+        if (id === 'B' && chain.crossGain) chain.crossGain.gain.value = gB;
       }
+    }
 
+    const effectiveRate = state.playbackRate + state.bend;
+
+    if (state.keyLock && nodeRef.current.filters[0]) {
+      // KEY LOCK mode: use PitchShifter (WSOLA) — tempo changes without pitch change
+      const shifter = new PitchShifter(
+        audioCtx.current,
+        buffers.current[id]!,
+        4096,
+        () => {
+          // Buffer ended
+          setState(prev => {
+            if (prev.isPlaying) {
+              offsetRef.current = 0;
+              if (id === 'A') setDeckATime(0); else setDeckBTime(0);
+              return { ...prev, isPlaying: false };
+            }
+            return prev;
+          });
+          stRef.current = null;
+        }
+      );
+      shifter.tempo = effectiveRate;
+      shifter.pitch = 1.0; // KEY LOCK: pitch stays at original
+      // Seek to current position
+      if (buffers.current[id]!.duration > 0) {
+        shifter.percentagePlayed = (offsetRef.current / buffers.current[id]!.duration) * 100;
+      }
+      shifter.connect(nodeRef.current.filters[0]);
+      stRef.current = shifter;
+      startTimeRef.current = audioCtx.current.currentTime;
+      setState(prev => ({ ...prev, isPlaying: true }));
+    } else {
+      // Normal mode: AudioBufferSourceNode (pitch tracks tempo)
       const source = audioCtx.current.createBufferSource();
       source.buffer = buffers.current[id];
-      source.playbackRate.value = state.playbackRate + state.bend;
-      
-      // Handle Looping
+      source.playbackRate.value = effectiveRate;
+
       if (state.isLooping && state.loopStart !== null && state.loopEnd !== null) {
         source.loop = true;
         source.loopStart = state.loopStart;
@@ -1343,11 +1387,10 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
       }
 
       source.connect(nodeRef.current.filters[0]);
-      
       startTimeRef.current = audioCtx.current.currentTime;
       source.start(0, offsetRef.current);
       nodeRef.current.source = source;
-      
+
       source.onended = () => {
         setState(prev => {
           if (prev.isPlaying) {
@@ -1358,8 +1401,26 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
           return prev;
         });
       };
-
       setState(prev => ({ ...prev, isPlaying: true }));
+    }
+  };
+
+  // Toggle Key Lock — restarts deck with/without WSOLA pitch shifter
+  const toggleKeyLock = (id: 'A' | 'B') => {
+    const deckRef = id === 'A' ? deckRefA : deckRefB;
+    const setter = id === 'A' ? setDeckA : setDeckB;
+    const isPlaying = id === 'A' ? deckRefA.current.isPlaying : deckRefB.current.isPlaying;
+    const newKeyLock = !deckRef.current.keyLock;
+
+    // Update ref immediately so startDeck sees the new value
+    deckRef.current = { ...deckRef.current, keyLock: newKeyLock };
+    setter(prev => ({ ...prev, keyLock: newKeyLock }));
+
+    if (isPlaying) {
+      stopDeck(id);
+      // Small delay to let stopDeck settle before restarting
+      setTimeout(() => startDeck(id), 30);
+    }
   };
 
   const playPause = (id: 'A' | 'B') => {
@@ -1376,17 +1437,24 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
     // Clamp time
     const targetTime = Math.max(0, Math.min(time, buffer.duration - 0.01));
     
-    const isPlaying = !!nodeRef.current.source;
-    
-    // Total clear
+    const stRef = id === "A" ? stShifterA : stShifterB;
+    const isPlaying = !!nodeRef.current.source || !!stRef.current;
+
+    // Clear native source
     if (nodeRef.current.source) {
       try {
         const s = nodeRef.current.source;
-        s.onended = null; // Prevent recursion or double trigger
+        s.onended = null;
         s.stop();
         s.disconnect();
       } catch (e) {}
       nodeRef.current.source = null;
+    }
+
+    // Clear SoundTouch node
+    if (stRef.current) {
+      stRef.current.disconnect();
+      stRef.current = null;
     }
 
     if (id === "A") {
@@ -1924,6 +1992,19 @@ Responde SOLO con este JSON (sin markdown):
     }
   }, [deckB.filterKnob]);
 
+  // Live tempo update for Key Lock mode (no restart needed, just update st.tempo)
+  useEffect(() => {
+    if (deckA.keyLock && stShifterA.current) {
+      stShifterA.current.tempo = deckA.playbackRate + deckA.bend;
+    }
+  }, [deckA.playbackRate, deckA.bend, deckA.keyLock]);
+
+  useEffect(() => {
+    if (deckB.keyLock && stShifterB.current) {
+      stShifterB.current.tempo = deckB.playbackRate + deckB.bend;
+    }
+  }, [deckB.playbackRate, deckB.bend, deckB.keyLock]);
+
   // ═══════════════════════════════════════════════
   // AUTOPILOT ENGINE — lógica real de mezcla automática
   // ═══════════════════════════════════════════════
@@ -2277,6 +2358,7 @@ Responde SOLO con este JSON (sin markdown):
                  onToggleMaster={() => toggleMaster('A')}
                  onSetLoop={(s, e, l) => handleSetLoop('A', s, e, l)}
                  analyser={nodesA.current.analyser}
+                 onToggleKeyLock={() => toggleKeyLock('A')}
                />
           </div>
         </div>
@@ -2496,6 +2578,7 @@ Responde SOLO con este JSON (sin markdown):
                  onToggleMaster={() => toggleMaster('B')}
                  onSetLoop={(s, e, l) => handleSetLoop('B', s, e, l)}
                  analyser={nodesB.current.analyser}
+                 onToggleKeyLock={() => toggleKeyLock('B')}
                />
           </div>
         </div>
@@ -2955,9 +3038,9 @@ function TrackOverview({ buffer, currentTime, color, onSeek }: {
   );
 }
 
-function Deck({ id, state, currentTime, audioBuffer, setState, onLoad, onPlay, onSeek, onCue, onCueDown, onCueUp, onHotCue, onSync, onToggleMaster, onSetLoop, analyser }: {
-  id: 'A' | 'B', 
-  state: DeckState, 
+function Deck({ id, state, currentTime, audioBuffer, setState, onLoad, onPlay, onSeek, onCue, onCueDown, onCueUp, onHotCue, onSync, onToggleMaster, onSetLoop, analyser, onToggleKeyLock }: {
+  id: 'A' | 'B',
+  state: DeckState,
   currentTime: number,
   audioBuffer: AudioBuffer | null,
   setState: React.Dispatch<React.SetStateAction<DeckState>>,
@@ -2971,7 +3054,8 @@ function Deck({ id, state, currentTime, audioBuffer, setState, onLoad, onPlay, o
   onSync: () => void,
   onToggleMaster: () => void,
   onSetLoop: (start: number | null, end: number | null, isLooping: boolean) => void,
-  analyser: AnalyserNode | null
+  analyser: AnalyserNode | null,
+  onToggleKeyLock: () => void,
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -3476,6 +3560,19 @@ function Deck({ id, state, currentTime, audioBuffer, setState, onLoad, onPlay, o
              </button>
 
           </div>
+
+          {/* Key Lock */}
+          <button
+            onClick={() => onToggleKeyLock()}
+            className={`w-full h-6 rounded-sm border text-[8px] font-black uppercase tracking-widest transition-all mb-1 ${
+              state.keyLock
+                ? 'bg-amber-400/30 border-amber-400 text-amber-300 shadow-[0_0_10px_rgba(251,191,36,0.3)]'
+                : 'bg-white/5 border-white/10 text-white/30 hover:bg-white/10 hover:text-white/50'
+            }`}
+            title="Key Lock — mantiene el tono original al cambiar el tempo (WSOLA)"
+          >
+            {state.keyLock ? '🔒 KEY LOCK ON' : 'KEY LOCK'}
+          </button>
 
           {/* FX Section */}
           <div className="flex gap-2 items-center justify-center mt-1 border-t border-white/5 pt-1">
