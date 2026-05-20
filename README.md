@@ -1,213 +1,215 @@
-# 🎛️ Liquid Glass DJ
+# Liquid Glass DJ
 
-> **Professional AI-powered two-channel DJ controller** built entirely in the browser using the Web Audio API, Google Gemini multimodal AI, and WebGPU-accelerated analysis.
-
----
-
-## ✨ Features
-
-### 🎚️ Dual-Deck Engine
-- Two independent audio channels — **Deck A** (cyan) and **Deck B** (yellow)
-- Real-time scrolling waveform with beat grid overlay
-- 3-band EQ (**High / Mid / Low**) with per-band **Kill** switches
-- Vertical gain fader with dB scale markings
-- Pitch/speed fader with **Linear / Log / Exp** curve modes
-- **+BEND / −BEND** momentary pitch nudge
-- **TAP BPM** tempo tap
-
-### 🎯 Transport & Performance
-- **CUE** — Pioneer-style: anchors point when paused, stutter-plays while held
-- **4 Hot Cues** per deck — set & jump to any position instantly
-- **Loop controls** — 4 / 8 / 16 / 32 beat quantized loops with visual overlay
-- **JogWheel** — rotates with the track; hover to reveal nudge (+/−) buttons
-- **MASTER** — flag one deck as tempo master
-- **SYNC** — magnetic phase-lock slave deck to master BPM
-
-### 🤖 AI Director (Google Gemini)
-| Feature | Description |
-|---|---|
-| **Multimodal Track Profiling** | Gemini *listens* to 12 s intro + outro snippets and returns genre, mood, instruments, vocal presence, energy arc, bass weight, and recommended mix techniques |
-| **AI BPM Correction** | Detects and fixes halftime / doubletime errors from the audio analyser (e.g. 87 → 174 BPM for Liquid D&B) |
-| **SMART MIX** | One-click AI transition — generates a JSON plan with technique, duration, bass-swap beat, energy target, and warning |
-| **AI AUTOPILOT** | Fully autonomous DJ mode: loads a playlist, pre-analyses every track, fires transitions at the AI-recommended `mixPoint`, and advances the queue |
-
-### 🎨 Transition Techniques
-| Technique | Description |
-|---|---|
-| `cut` | Hard cut at the next quantized downbeat |
-| `blend` | Long smooth crossfade (up to 32 s) |
-| `filter_sweep` | High-pass sweep on outgoing + gain ramp on incoming |
-| `echo_out` | Aggressive high-pass + fast fade — ideal for dense sub-bass tracks |
-
-### ⚡ Performance & Analysis
-- **WebGPU-accelerated** BPM refinement and musical key detection (falls back to CPU)
-- **Beat Sync Overlay** — rolling scrolling waveform for both decks with phase-lock indicator
-- **Master LED VU meters** — real-time stereo level display
-- **RAM / GPU meters** in the footer status bar
-- **Audio Distortion FX** — SVG turbulence displacement driven by live spectrum data
-
-### 🎙️ Recording
-- One-click session recording via `MediaRecorder` → downloads as `.webm` (320 kbps)
-
-### ⌨️ Keyboard Shortcuts
-| Key | Action |
-|---|---|
-| `S` | Play / Pause Deck A |
-| `A` | CUE Deck A (hold = stutter) |
-| `D` | Sync Deck A → Deck B BPM |
-| `1–4` | Hot Cues 1–4 on Deck A |
-| `L` | Play / Pause Deck B |
-| `K` | CUE Deck B (hold = stutter) |
-| `;` | Sync Deck B → Deck A BPM |
-| `7–0` | Hot Cues 1–4 on Deck B |
-| `← →` | Move crossfader left / right |
-| `B` | Center crossfader |
+Controlador de DJ profesional de dos canales impulsado por inteligencia artificial, construido íntegramente en el navegador con Web Audio API, Google Gemini multimodal y análisis acelerado por WebGPU.
 
 ---
 
-## 🧰 Tech Stack
+## Características
 
-| Layer | Technology |
+### Motor de doble deck
+
+- Dos canales de audio independientes: **Deck A** (cian) y **Deck B** (amarillo)
+- Forma de onda con desplazamiento en tiempo real y cuadrícula de beats superpuesta
+- Ecualizador de 3 bandas (**High / Mid / Low**) con botones **Kill** por banda
+- Fader de ganancia vertical con escala en dB
+- Fader de velocidad/tono con curvas **Linear / Log / Exp**
+- Nudge momentáneo **+BEND / -BEND**
+- Tap BPM manual
+
+### Transporte y performance
+
+- **CUE** — estilo Pioneer: ancla el punto en pausa, reproduce en stutter mientras se mantiene pulsado
+- **4 Hot Cues** por deck — marca y salta a cualquier posición al instante
+- **Loops cuantizados** de 4 / 8 / 16 / 32 beats con indicador visual en la forma de onda
+- **JogWheel** — gira con la pista; al pasar el cursor muestra los botones de nudge (+/-)
+- **MASTER** — designa un deck como maestro de tempo
+- **SYNC** — bloqueo de fase magnético del deck esclavo al BPM maestro
+
+### Director de IA (Google Gemini)
+
+| Función | Descripción |
 |---|---|
-| UI Framework | React 19 + TypeScript |
+| Perfil de pista multimodal | Gemini escucha fragmentos de 12 s del intro y el outro, y devuelve género, mood, instrumentos, presencia vocal, arco de energía, peso del bajo y técnicas de mezcla recomendadas |
+| Corrección de BPM por IA | Detecta y corrige errores de halftime/doubletime del analizador de audio (p. ej. 87 → 174 BPM en Liquid D&B) |
+| SMART MIX | Transición con un clic: genera un plan JSON con técnica, duración, beat de intercambio de bajos, objetivo de energía y advertencias |
+| AUTOPILOT | Modo DJ completamente autónomo: carga una playlist, pre-analiza cada pista, dispara las transiciones en el mixPoint recomendado por la IA y avanza la cola |
+
+### Técnicas de transición
+
+| Técnica | Descripción |
+|---|---|
+| `cut` | Corte duro en el siguiente tiempo cuantizado |
+| `blend` | Crossfade largo y suave (hasta 32 s) |
+| `filter_sweep` | Barrido high-pass en la pista saliente + rampa de ganancia en la entrante |
+| `echo_out` | High-pass agresivo + fade rápido — ideal para pistas con sub-bajos densos |
+
+### Rendimiento y análisis
+
+- Detección de BPM y tonalidad musical acelerada por **WebGPU** (cae a CPU si no está disponible)
+- Overlay de sincronización de beats con forma de onda rodante y bloqueo de fase
+- Medidores VU estéreo LED en tiempo real
+- Medidores de RAM y GPU en la barra de estado inferior
+- Efecto de distorsión de audio: desplazamiento SVG turbulence reactivo al espectro en vivo
+
+### Grabación
+
+- Grabación de sesión con un clic mediante `MediaRecorder` — descarga como `.webm` a 320 kbps
+
+### Atajos de teclado
+
+| Tecla | Acción |
+|---|---|
+| `S` | Play / Pausa Deck A |
+| `A` | CUE Deck A (mantener = stutter) |
+| `D` | Sincronizar Deck A al BPM del Deck B |
+| `1–4` | Hot Cues 1–4 del Deck A |
+| `L` | Play / Pausa Deck B |
+| `K` | CUE Deck B (mantener = stutter) |
+| `;` | Sincronizar Deck B al BPM del Deck A |
+| `7–0` | Hot Cues 1–4 del Deck B |
+| `← →` | Mover el crossfader |
+| `B` | Centrar el crossfader |
+
+---
+
+## Stack tecnológico
+
+| Capa | Tecnología |
+|---|---|
+| Framework UI | React 19 + TypeScript |
 | Bundler | Vite 6 |
-| Styling | Tailwind CSS v4 |
-| Animation | Framer Motion (motion/react) |
-| Audio Engine | Web Audio API |
-| BPM Detection | `web-audio-beat-detector` |
-| GPU Analysis | WebGPU (`@webgpu/types`) |
-| AI | Google Gemini 2.0 Flash (`@google/genai`) |
-| Icons | Lucide React |
-| Desktop | Electron 41 + electron-builder |
+| Estilos | Tailwind CSS v4 |
+| Animaciones | Framer Motion (motion/react) |
+| Motor de audio | Web Audio API |
+| Detección de BPM | `web-audio-beat-detector` |
+| Análisis GPU | WebGPU (`@webgpu/types`) |
+| Inteligencia artificial | Google Gemini 2.0 Flash (`@google/genai`) |
+| Iconos | Lucide React |
+| Escritorio | Electron 41 + electron-builder |
 
 ---
 
-## 🚀 Getting Started
+## Instalación y uso
 
-### Prerequisites
-- **Node.js** 18+
-- A **Google Gemini API key** → [Get one free](https://aistudio.google.com/app/apikey)
+### Requisitos previos
 
-### Installation
+- Node.js 18 o superior
+- Clave de API de Google Gemini — [obtener gratis](https://aistudio.google.com/app/apikey)
+
+### Instalación
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/your-user/liquid-glass-dj.git
-cd liquid-glass-dj
+# 1. Clonar el repositorio
+git clone https://github.com/amauri7399/-liquid-glass-dj.git
+cd -liquid-glass-dj
 
-# 2. Install dependencies
+# 2. Instalar dependencias
 npm install
 
-# 3. Set your Gemini API key
+# 3. Configurar la clave de API
 cp .env.example .env.local
-# Edit .env.local and replace YOUR_API_KEY_HERE
+# Editar .env.local y reemplazar YOUR_API_KEY_HERE con tu clave real
 ```
 
-### Running (Web)
+### Ejecutar en el navegador
 
 ```bash
 npm run dev
-# → http://localhost:3000
+# Abre http://localhost:3000
 ```
 
-### Running (Desktop / Electron)
+### Ejecutar como aplicación de escritorio (Electron)
 
 ```bash
 npm run electron:start
 ```
 
-### Build for Distribution
+### Compilar para distribución
 
 ```bash
-# Web build
+# Build web
 npm run build
 
-# Desktop installer (Windows .exe / Mac .dmg / Linux .AppImage)
+# Instalador de escritorio (.exe en Windows, .dmg en Mac, .AppImage en Linux)
 npm run electron:build
 ```
 
 ---
 
-## ⚙️ Configuration
+## Configuración
 
-Create a `.env.local` file in the project root:
+Crear el archivo `.env.local` en la raíz del proyecto:
 
 ```env
-GEMINI_API_KEY="your-gemini-api-key-here"
+GEMINI_API_KEY="tu-clave-de-api-aqui"
 APP_URL="http://localhost:3000"
 ```
 
-> **Note:** The app works without a Gemini API key — BPM detection, EQ, mixing, recording, and all manual controls still function. AI features (SMART MIX, AUTOPILOT, track profiling) fall back to sensible defaults.
+> La aplicación funciona sin clave de API. La detección de BPM, el ecualizador, la mezcla manual, los loops y la grabación están disponibles sin conexión a Gemini. Las funciones de IA (SMART MIX, AUTOPILOT, perfil de pista) usarán valores predeterminados si no hay clave configurada.
 
 ---
 
-## 🎛️ AI Autopilot — How It Works
+## Autopilot — cómo funciona
 
-1. **Upload a playlist** (any number of audio files) in the AUTOPILOT sidebar
-2. Press **▶ START AUTOPILOT**
-3. The system:
-   - Loads Track 1 → Deck A, Track 2 → Deck B
-   - Sends 12 s audio snippets (intro + outro) to Gemini → builds a `TrackProfile`
-   - Corrects BPM if the detector returned a halftime/doubletime value
-   - Waits until the AI-recommended `mixPoint` is reached (40–70% consumed)
-   - Calls SMART MIX with full profile context from both decks
-   - Executes the transition, then flips the active deck and loads the next track
-   - Repeats until the playlist is exhausted
+1. Subir una playlist en el panel lateral de AUTOPILOT
+2. Pulsar **Iniciar Autopilot**
+3. El sistema:
+   - Carga la pista 1 en el Deck A y la pista 2 en el Deck B
+   - Envía fragmentos de audio a Gemini para construir un perfil por pista
+   - Corrige el BPM si el detector devolvió un valor en halftime o doubletime
+   - Espera hasta que se alcanza el mixPoint recomendado por la IA (entre 40 % y 70 % de la pista)
+   - Ejecuta la transición con SMART MIX usando los perfiles completos de ambos decks
+   - Cambia el deck activo y carga la siguiente pista
+   - Repite hasta agotar la playlist
 
-### mixPoint Reference
+### Referencia de mixPoint
 
-| Value | Trigger | Typical use |
+| Valor | Disparo | Uso típico |
 |---|---|---|
-| `early_cut` | 40% consumed | Short / repetitive tracks |
-| `mid_break` | 50% consumed | Dense halftime tracks |
-| `post_drop` | 65% consumed | Cut after second drop |
-| `outro` | 70% consumed | Tracks with clear outros (default Liquid D&B) |
+| `early_cut` | 40 % consumido | Pistas cortas o repetitivas |
+| `mid_break` | 50 % consumido | Halftime con bajos densos |
+| `post_drop` | 65 % consumido | Cortar después del segundo drop |
+| `outro` | 70 % consumido | Pistas con outro definido (Liquid D&B por defecto) |
 
-### Phase Dictionary (Director Prompt)
+### Diccionario de fases
 
-| Phase | Genre | BPM Range | Default Technique |
+| Fase | Género | Rango de BPM | Técnica por defecto |
 |---|---|---|---|
-| 1 | Halftime / Neurohop | 85–110 | `cut` or `echo_out` |
+| 1 | Halftime / Neurohop | 85–110 | `cut` o `echo_out` |
 | 2 | Breakbeat / Cinematic | 125–140 | `filter_sweep` |
 | 3 | Liquid / Soulful D&B | 168–174 | `blend` |
-| 4 | Rollers / Peak D&B | 172–178 | `filter_sweep` or `blend` |
+| 4 | Rollers / Peak D&B | 172–178 | `filter_sweep` o `blend` |
 
 ---
 
-## 📁 Project Structure
+## Estructura del proyecto
 
 ```
 liquid-glass-dj/
 ├── src/
-│   ├── App.tsx              # Main application (all logic + UI)
-│   ├── webgpu-analyzer.ts   # WebGPU-accelerated BPM + key detection
-│   ├── main.tsx             # React entry point
-│   └── index.css            # Global styles + Tailwind directives
-├── electron-main.cjs        # Electron main process
-├── index.html               # HTML shell
-├── vite.config.ts           # Vite configuration
-├── tsconfig.json            # TypeScript configuration
-├── .env.example             # Environment variable template
+│   ├── App.tsx              # Aplicacion principal (logica + UI)
+│   ├── webgpu-analyzer.ts   # Analisis de BPM y tonalidad con WebGPU
+│   ├── main.tsx             # Punto de entrada de React
+│   └── index.css            # Estilos globales + directivas Tailwind
+├── electron-main.cjs        # Proceso principal de Electron
+├── index.html               # Shell HTML
+├── vite.config.ts           # Configuracion de Vite
+├── tsconfig.json            # Configuracion de TypeScript
+├── .env.example             # Plantilla de variables de entorno
 └── package.json
 ```
 
 ---
 
-## 🔒 Security
+## Seguridad
 
-- **API key** is read from `.env.local` at build time via `process.env.GEMINI_API_KEY`
-- `.env.local` is excluded from git via `.gitignore` (`.env*` rule)
-- No API key is ever hardcoded in source files
-- Audio data sent to Gemini is **mono 16 kHz PCM WAV**, max ~256 KB per snippet
-
----
-
-## 📄 License
-
-Apache 2.0 — see [LICENSE](LICENSE) for details.
+- La clave de API se lee desde `.env.local` en tiempo de compilación mediante `process.env.GEMINI_API_KEY`
+- `.env.local` está excluido del repositorio git por la regla `.env*` en `.gitignore`
+- Ninguna clave de API está escrita directamente en el código fuente
+- El audio enviado a Gemini es PCM WAV mono a 16 kHz, con un máximo de ~256 KB por fragmento
 
 ---
 
-<div align="center">
-  Built with ❤️ using React, Web Audio API, and Google Gemini
-</div>
+## Licencia
+
+Apache 2.0
