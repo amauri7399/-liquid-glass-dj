@@ -1,10 +1,10 @@
 {
-  "name": "react-example",
+  "name": "liquid-glass-dj",
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "author": "AI DJ Studio Client",
-  "description": "Professional AI Powered DJ Studio",
+  "author": "amauri7399",
+  "description": "Controlador de DJ profesional de dos canales impulsado por IA, construido en el navegador con Web Audio API, Google Gemini y WebGPU",
   "main": "electron-main.cjs",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
@@ -16,8 +16,8 @@
     "lint": "tsc --noEmit"
   },
   "build": {
-    "appId": "com.aidjstudio.app",
-    "productName": "AI DJ Studio",
+    "appId": "com.liquidglassdj.app",
+    "productName": "Liquid Glass DJ",
     "directories": {
       "output": "release"
     },
