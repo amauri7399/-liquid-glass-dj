@@ -1,0 +1,6 @@
+{
+  "name": "Liquid Glass DJ",
+  "description": "A high-performance two-channel DJ controller with Web Audio API, featuring a premium Liquid Glass aesthetic and live recording capabilities.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

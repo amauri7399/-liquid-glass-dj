@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Claude_in_Chrome__javascript_tool",
+      "mcp__Claude_in_Chrome__navigate",
+      "mcp__Claude_in_Chrome__computer",
+      "mcp__Claude_in_Chrome__resize_window",
+      "mcp__Claude_in_Chrome__tabs_context_mcp",
+      "WebFetch(domain:www.jeep.com.mx)",
+      "mcp__Claude_in_Chrome__form_input",
+      "mcp__Claude_in_Chrome__find",
+      "Bash(grep -n \"price\\\\|precio\\\\|numPrice\\\\|PRECIO\\\\|\\\\$[0-9]\" \"D:\\\\adistem 2026\\\\adistem2026\\\\src\\\\lib\\\\components\\\\SeminuevosView.svelte\")",
+      "Bash(pip install *)",
+      "Bash(python -m markitdown \"C:\\\\Users\\\\Amauri\\\\Downloads\\\\Interno _ ADISTEM _ Revisión de prototipo \\(1\\).pptx\")",
+      "Bash(npx tsc *)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/adistem2026/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5174/adistem2026/)",
+      "Skill(anthropic-skills:docx)",
+      "Skill(anthropic-skills:docx:*)",
+      "Read(//c/Users/Amauri/Downloads/**)",
+      "Bash(pandoc \"STPS DC-3 Constancia de habilidades laborales.docx\" -t markdown)",
+      "Bash(python -c ' *)"
+    ]
+  }
+}
