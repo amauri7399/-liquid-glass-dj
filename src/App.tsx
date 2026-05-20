@@ -367,6 +367,8 @@ interface DeckState {
   structureMarkers: { time: number; label: string; type: 'intro' | 'build' | 'drop' | 'break' | 'outro' }[];
   aiProfile?: AiTrackProfile; // built once via Gemini multimodal when track loads
   chordMap?: ChordSegment[];  // harmonic chord analysis per 2-bar segment
+  fxReverb: number;  // 0-1 wet amount
+  fxDelay: number;   // 0-1 wet amount
 }
 
 // Harmonic Compatibility (Camelot Wheel)
@@ -394,6 +396,81 @@ const getCamelotDiff = (key1: string, key2: string) => {
   }
 };
 
+function generateImpulse(ctx: AudioContext, duration = 2.5, decay = 2.0): AudioBuffer {
+  const sr = ctx.sampleRate;
+  const len = Math.floor(sr * duration);
+  const buf = ctx.createBuffer(2, len, sr);
+  for (let c = 0; c < 2; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = 0; i < len; i++) {
+      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+    }
+  }
+  return buf;
+}
+
+function MixerSpectrum({ analyserA, analyserB, isActive }: {
+  analyserA: AnalyserNode | null;
+  analyserB: AnalyserNode | null;
+  isActive: boolean;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    if (!canvasRef.current || !isActive) return;
+    const canvas = canvasRef.current;
+    const ctx2d = canvas.getContext('2d');
+    if (!ctx2d) return;
+
+    const BARS = 28;
+    let raf: number;
+
+    const draw = () => {
+      ctx2d.clearRect(0, 0, canvas.width, canvas.height);
+      const bufA = new Uint8Array(128);
+      const bufB = new Uint8Array(128);
+      if (analyserA) analyserA.getByteFrequencyData(bufA);
+      if (analyserB) analyserB.getByteFrequencyData(bufB);
+
+      const totalW = canvas.width;
+      const barW = Math.floor(totalW / BARS) - 1;
+
+      for (let i = 0; i < BARS; i++) {
+        const binIdx = Math.min(127, Math.floor(Math.pow(i / BARS, 1.5) * 80));
+        const vA = (bufA[binIdx] || 0) / 255;
+        const vB = (bufB[binIdx] || 0) / 255;
+        const combined = Math.max(vA, vB);
+        const hPx = Math.max(1, Math.floor(combined * canvas.height));
+
+        const x = i * (barW + 1);
+        // Color: cyan-green for low-mid, yellow for high
+        const t = i / BARS;
+        const r = Math.floor(t * 100);
+        const g = Math.floor(200 + t * 55);
+        const b = Math.floor(255 * (1 - t));
+
+        const grad = ctx2d.createLinearGradient(0, canvas.height, 0, canvas.height - hPx);
+        grad.addColorStop(0, `rgba(${r},${g},${b},0.9)`);
+        grad.addColorStop(1, `rgba(${r},${g},${b},0.2)`);
+        ctx2d.fillStyle = grad;
+        ctx2d.fillRect(x, canvas.height - hPx, barW, hPx);
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    draw();
+    return () => cancelAnimationFrame(raf);
+  }, [analyserA, analyserB, isActive]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={240}
+      height={40}
+      className="w-full h-full"
+    />
+  );
+}
+
 export default function App() {
   const [audioStarted, setAudioStarted] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -415,8 +492,8 @@ export default function App() {
   const [crossfader, setCrossfader] = useState(0.5); // 0 to 1
 
   // Decks Management
-  const [deckA, setDeckA] = useState<DeckState>({ id: 'A', isPlaying: false, trackName: '', playbackRate: 1, bend: 0, gain: 0.8, low: 0, mid: 0, high: 0, bpm: 128, baseBpm: 128, cuePoint: 0, hotCues: [null, null, null, null], isAnalyzing: false, syncLocked: false, isMaster: false, key: '8A', pitchCurve: 'linear', loopStart: null, loopEnd: null, isLooping: false, structureMarkers: [] });
-  const [deckB, setDeckB] = useState<DeckState>({ id: 'B', isPlaying: false, trackName: '', playbackRate: 1, bend: 0, gain: 0.8, low: 0, mid: 0, high: 0, bpm: 128, baseBpm: 128, cuePoint: 0, hotCues: [null, null, null, null], isAnalyzing: false, syncLocked: false, isMaster: false, key: '3B', pitchCurve: 'linear', loopStart: null, loopEnd: null, isLooping: false, structureMarkers: [] });
+  const [deckA, setDeckA] = useState<DeckState>({ id: 'A', isPlaying: false, trackName: '', playbackRate: 1, bend: 0, gain: 0.8, low: 0, mid: 0, high: 0, bpm: 128, baseBpm: 128, cuePoint: 0, hotCues: [null, null, null, null], isAnalyzing: false, syncLocked: false, isMaster: false, key: '8A', pitchCurve: 'linear', loopStart: null, loopEnd: null, isLooping: false, structureMarkers: [], fxReverb: 0, fxDelay: 0 });
+  const [deckB, setDeckB] = useState<DeckState>({ id: 'B', isPlaying: false, trackName: '', playbackRate: 1, bend: 0, gain: 0.8, low: 0, mid: 0, high: 0, bpm: 128, baseBpm: 128, cuePoint: 0, hotCues: [null, null, null, null], isAnalyzing: false, syncLocked: false, isMaster: false, key: '3B', pitchCurve: 'linear', loopStart: null, loopEnd: null, isLooping: false, structureMarkers: [], fxReverb: 0, fxDelay: 0 });
   const [isAiMixing, setIsAiMixing] = useState(false);
 
   // Poll RAM (Chrome performance.memory) + estimate GPU load
@@ -465,6 +542,42 @@ FASE 4: Peak Time & Cierre (Rollers/Dancefloor ~ 174-175 BPM)
 - Params: transitionDuration: 16 a 24, bassSwapBeat: 8, energy: "boost".
 CASO EXTREMO: Si saltas de Fase 1 (90 BPM) a Fase 4 (174 BPM) o viceversa, OBLIGATORIO "echo_out" rápido (transitionDuration: 8).
 FORMATO ESTRICTO: Responde SOLO con JSON válido, sin markdown.`);
+
+  // CARGAR configuracion al arrancar
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('ljdj-settings');
+      if (!saved) return;
+      const s = JSON.parse(saved);
+      if (s.crossfader !== undefined) setCrossfader(s.crossfader);
+      if (s.directorPrompt) setDirectorPrompt(s.directorPrompt);
+      if (s.deckA) setDeckA(prev => ({ ...prev, gain: s.deckA.gain ?? prev.gain, low: s.deckA.low ?? prev.low, mid: s.deckA.mid ?? prev.mid, high: s.deckA.high ?? prev.high }));
+      if (s.deckB) setDeckB(prev => ({ ...prev, gain: s.deckB.gain ?? prev.gain, low: s.deckB.low ?? prev.low, mid: s.deckB.mid ?? prev.mid, high: s.deckB.high ?? prev.high }));
+    } catch(e) {}
+  }, []);
+
+  // GUARDAR configuracion al cambiar
+  useEffect(() => {
+    try {
+      localStorage.setItem('ljdj-settings', JSON.stringify({
+        crossfader,
+        directorPrompt,
+        deckA: { gain: deckA.gain, low: deckA.low, mid: deckA.mid, high: deckA.high },
+        deckB: { gain: deckB.gain, low: deckB.low, mid: deckB.mid, high: deckB.high },
+      }));
+    } catch(e) {}
+  }, [crossfader, directorPrompt, deckA.gain, deckA.low, deckA.mid, deckA.high, deckB.gain, deckB.low, deckB.mid, deckB.high]);
+
+  const moveTrack = useCallback((index: number, direction: -1 | 1) => {
+    setPlaylist(prev => {
+      const next = [...prev];
+      const target = index + direction;
+      if (target < 0 || target >= next.length) return prev;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }, []);
+
   const [isAutopilotActive, setIsAutopilotActive] = useState(false);
   const [autopilotActiveDeckUI, setAutopilotActiveDeckUI] = useState<'A' | 'B'>('A');
   // --- AUTOPILOT REFS ---
@@ -696,8 +809,34 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
   };
 
   // Refs for individual Deck Audio Chains
-  const nodesA = useRef<{ source: AudioBufferSourceNode | null, analyser: AnalyserNode | null, gain: GainNode | null, crossGain: GainNode | null, filters: BiquadFilterNode[], highPass: BiquadFilterNode | null }>({ source: null, analyser: null, gain: null, crossGain: null, filters: [], highPass: null });
-  const nodesB = useRef<{ source: AudioBufferSourceNode | null, analyser: AnalyserNode | null, gain: GainNode | null, crossGain: GainNode | null, filters: BiquadFilterNode[], highPass: BiquadFilterNode | null }>({ source: null, analyser: null, gain: null, crossGain: null, filters: [], highPass: null });
+  const nodesA = useRef<{
+    source: AudioBufferSourceNode | null;
+    analyser: AnalyserNode | null;
+    gain: GainNode | null;
+    crossGain: GainNode | null;
+    filters: BiquadFilterNode[];
+    highPass: BiquadFilterNode | null;
+    delayNode: DelayNode | null;
+    delayWet: GainNode | null;
+    delayFeedback: GainNode | null;
+    reverbNode: ConvolverNode | null;
+    reverbWet: GainNode | null;
+  }>({ source: null, analyser: null, gain: null, crossGain: null, filters: [], highPass: null,
+       delayNode: null, delayWet: null, delayFeedback: null, reverbNode: null, reverbWet: null });
+  const nodesB = useRef<{
+    source: AudioBufferSourceNode | null;
+    analyser: AnalyserNode | null;
+    gain: GainNode | null;
+    crossGain: GainNode | null;
+    filters: BiquadFilterNode[];
+    highPass: BiquadFilterNode | null;
+    delayNode: DelayNode | null;
+    delayWet: GainNode | null;
+    delayFeedback: GainNode | null;
+    reverbNode: ConvolverNode | null;
+    reverbWet: GainNode | null;
+  }>({ source: null, analyser: null, gain: null, crossGain: null, filters: [], highPass: null,
+       delayNode: null, delayWet: null, delayFeedback: null, reverbNode: null, reverbWet: null });
   const buffers = useRef<{ A: AudioBuffer | null, B: AudioBuffer | null }>({ A: null, B: null });
 
   // --- AUDIO SETUP ---
@@ -755,7 +894,33 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
     gain.connect(crossGain);
     crossGain.connect(masterGain.current);
 
-    return { analyser, gain, crossGain, filters: [lowFilter, midFilter, highFilter], highPass };
+    // --- FX: Delay ---
+    const delayNode = audioCtx.current.createDelay(2.0);
+    delayNode.delayTime.value = 0.375; // roughly 3/8 note at ~120 BPM
+    const delayFeedback = audioCtx.current.createGain();
+    delayFeedback.gain.value = 0.35;
+    const delayWet = audioCtx.current.createGain();
+    delayWet.gain.value = 0;
+
+    // Delay feedback loop
+    analyser.connect(delayNode);
+    delayNode.connect(delayFeedback);
+    delayFeedback.connect(delayNode);
+    delayNode.connect(delayWet);
+    delayWet.connect(masterGain.current);
+
+    // --- FX: Reverb ---
+    const reverbNode = audioCtx.current.createConvolver();
+    reverbNode.buffer = generateImpulse(audioCtx.current);
+    const reverbWet = audioCtx.current.createGain();
+    reverbWet.gain.value = 0;
+
+    analyser.connect(reverbNode);
+    reverbNode.connect(reverbWet);
+    reverbWet.connect(masterGain.current);
+
+    return { analyser, gain, crossGain, filters: [lowFilter, midFilter, highFilter], highPass,
+             delayNode, delayWet, delayFeedback, reverbNode, reverbWet };
   };
 
   // --- RECORDING ---
@@ -1369,6 +1534,37 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
       warning: null,
     };
 
+    // --- SMART OFFLINE DEFAULTS (sin API key, basado en perfiles y fases) ---
+    if (!process.env.GEMINI_API_KEY) {
+      const fp = fromDeck.aiProfile?.phase ?? 3;
+      const tp = toDeck.aiProfile   ?.phase ?? 3;
+      const phaseJump = Math.abs(fp - tp);
+      // Harmonic hint: if we have compatible mix points, prefer blend
+      const harmonicPoints = findBestHarmonicMixPoints(fromDeck.chordMap || [], toDeck.chordMap || []);
+      const hasGoodHarmony = harmonicPoints.length > 0 && harmonicPoints[0].score >= 0.75;
+
+      if (phaseJump >= 2) {
+        plan = { technique: 'echo_out', transitionDuration: 8, bassSwapBeat: 4,
+                 advice: `SALTO FASE ${fp}→${tp}`, energy: 'drop', warning: `BPM gap grande — usa echo_out` };
+      } else if (hasGoodHarmony && (fp === 3 || fp === 4)) {
+        plan = { technique: 'blend', transitionDuration: 28, bassSwapBeat: 16,
+                 advice: 'BLEND ARMONICO', energy: 'maintain', warning: null };
+      } else if (fp === 1) {
+        plan = { technique: fromDeck.aiProfile?.bassWeight === 'sub' ? 'cut' : 'echo_out',
+                 transitionDuration: 8, bassSwapBeat: 4, advice: 'HALFTIME CUT', energy: 'drop', warning: null };
+      } else if (fp === 2) {
+        plan = { technique: 'filter_sweep', transitionDuration: 16, bassSwapBeat: 8,
+                 advice: 'BREAKBEAT SWEEP', energy: 'boost', warning: null };
+      } else if (fp === 3) {
+        plan = { technique: 'blend', transitionDuration: 32, bassSwapBeat: 16,
+                 advice: 'LIQUID BLEND', energy: 'maintain', warning: null };
+      } else {
+        plan = { technique: 'filter_sweep', transitionDuration: 20, bassSwapBeat: 8,
+                 advice: 'PEAK SWEEP', energy: 'boost', warning: null };
+      }
+      setAiMixAdvice(`OFFLINE: ${plan.advice}`);
+    }
+
     if (process.env.GEMINI_API_KEY) {
       try {
         setAiMixAdvice('AI ANALYZING MIX...');
@@ -1638,6 +1834,22 @@ Responde SOLO con este JSON (sin markdown):
       nodesB.current.crossGain.gain.setTargetAtTime(gB, audioCtx.current!.currentTime, 0.05);
     }
   }, [crossfader]);
+
+  // FX Delay/Reverb for Deck A
+  useEffect(() => {
+    if (!audioCtx.current) return;
+    const t = audioCtx.current.currentTime;
+    if (nodesA.current.delayWet)  nodesA.current.delayWet.gain.setTargetAtTime(deckA.fxDelay, t, 0.05);
+    if (nodesA.current.reverbWet) nodesA.current.reverbWet.gain.setTargetAtTime(deckA.fxReverb, t, 0.05);
+  }, [deckA.fxDelay, deckA.fxReverb]);
+
+  // FX Delay/Reverb for Deck B
+  useEffect(() => {
+    if (!audioCtx.current) return;
+    const t = audioCtx.current.currentTime;
+    if (nodesB.current.delayWet)  nodesB.current.delayWet.gain.setTargetAtTime(deckB.fxDelay, t, 0.05);
+    if (nodesB.current.reverbWet) nodesB.current.reverbWet.gain.setTargetAtTime(deckB.fxReverb, t, 0.05);
+  }, [deckB.fxDelay, deckB.fxReverb]);
 
   // ═══════════════════════════════════════════════
   // AUTOPILOT ENGINE — lógica real de mezcla automática
@@ -2131,6 +2343,15 @@ Responde SOLO con este JSON (sin markdown):
 
               <PhaseMeter timeA={deckATime} timeB={deckBTime} bpmA={deckA.bpm} bpmB={deckB.bpm} />
 
+              {/* Spectrum Visualizer */}
+              <div className="h-10 bg-black/40 rounded border border-white/5 overflow-hidden">
+                <MixerSpectrum
+                  analyserA={nodesA.current.analyser}
+                  analyserB={nodesB.current.analyser}
+                  isActive={deckA.isPlaying || deckB.isPlaying}
+                />
+              </div>
+
               <div>
                 <div className="flex justify-between text-[10px] font-bold uppercase mb-1 px-1 opacity-60">
                   <span className="text-[#00f2ff]">A</span>
@@ -2215,8 +2436,25 @@ Responde SOLO con este JSON (sin markdown):
                   ) : (
                     <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-1">
                       {playlist.map((file, i) => (
-                        <div key={i} className="text-[10px] bg-white/5 rounded px-2 py-1 truncate border border-white/5 text-[#aaa]">
-                          <span className="opacity-50 mr-2">{i+1}.</span> {file.name}
+                        <div key={i} className="flex items-center gap-1 bg-white/5 rounded px-2 py-1 border border-white/5">
+                          <span className="text-[9px] opacity-30 w-4 shrink-0">{i+1}.</span>
+                          <span className="text-[10px] text-[#aaa] truncate flex-1">{file.name}</span>
+                          <div className="flex flex-col gap-0.5 shrink-0">
+                            <button
+                              onClick={() => moveTrack(i, -1)}
+                              disabled={i === 0}
+                              className="text-[8px] text-[#555] hover:text-white disabled:opacity-20 leading-none px-0.5"
+                            >▲</button>
+                            <button
+                              onClick={() => moveTrack(i, 1)}
+                              disabled={i === playlist.length - 1}
+                              className="text-[8px] text-[#555] hover:text-white disabled:opacity-20 leading-none px-0.5"
+                            >▼</button>
+                          </div>
+                          <button
+                            onClick={() => setPlaylist(prev => prev.filter((_, idx) => idx !== i))}
+                            className="text-[8px] text-[#444] hover:text-red-400 shrink-0 ml-1"
+                          >✕</button>
                         </div>
                       ))}
                     </div>
@@ -3020,7 +3258,7 @@ function Deck({ id, state, currentTime, audioBuffer, setState, onLoad, onPlay, o
              >
                MASTER
              </button>
-             <button 
+             <button
                onClick={() => {
                  if (state.syncLocked) {
                    setState(p => ({ ...p, syncLocked: false }));
@@ -3034,6 +3272,30 @@ function Deck({ id, state, currentTime, audioBuffer, setState, onLoad, onPlay, o
              </button>
 
           </div>
+
+          {/* FX Section */}
+          <div className="flex gap-2 items-center justify-center mt-1 border-t border-white/5 pt-1">
+            <span className="text-[7px] font-bold opacity-30 uppercase tracking-widest">FX</span>
+            <div className="flex gap-3">
+              <Knob
+                label="REVERB"
+                min={0} max={1}
+                defaultValue={0}
+                value={state.fxReverb}
+                onChange={(v) => setState(p => ({ ...p, fxReverb: v }))}
+                color={id === 'A' ? '#00f2ff' : '#ffcc00'}
+              />
+              <Knob
+                label="DELAY"
+                min={0} max={1}
+                defaultValue={0}
+                value={state.fxDelay}
+                onChange={(v) => setState(p => ({ ...p, fxDelay: v }))}
+                color={id === 'A' ? '#00f2ff' : '#ffcc00'}
+              />
+            </div>
+          </div>
+
         </div>
 
         <div className="flex flex-col items-center gap-1 group/pitch ml-1 h-full py-1">
