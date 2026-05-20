@@ -9,7 +9,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Play, Pause, Square, Radio, SkipBack, Download, Headphones, Mic2, Save } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { analyze } from 'web-audio-beat-detector';
-import { analyzeAudioAdvanced } from './webgpu-analyzer';
+import { analyzeAudioAdvanced, analyzeChordMap, findBestHarmonicMixPoints, type ChordSegment, type HarmonicMixPoint } from './webgpu-analyzer';
 
 // AI client created once at module level (avoids re-instantiation on every render)
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
@@ -366,6 +366,7 @@ interface DeckState {
   isMaster: boolean;
   structureMarkers: { time: number; label: string; type: 'intro' | 'build' | 'drop' | 'break' | 'outro' }[];
   aiProfile?: AiTrackProfile; // built once via Gemini multimodal when track loads
+  chordMap?: ChordSegment[];  // harmonic chord analysis per 2-bar segment
 }
 
 // Harmonic Compatibility (Camelot Wheel)
@@ -846,6 +847,15 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
     analyzeStructureWithAi(id, file.name, audioBuffer.duration, detBpm);
     // Multimodal pre-analysis — Gemini listens to the audio, caches a profile and corrects BPM
     analyzeTrackProfileWithAi(id, audioBuffer, file.name, detBpm);
+    // Harmonic chord map — runs deferred so it doesn't block playback startup
+    const setter = id === 'A' ? setDeckA : setDeckB;
+    setTimeout(() => {
+      try {
+        const chords = analyzeChordMap(audioBuffer, detBpm);
+        setter(prev => ({ ...prev, chordMap: chords }));
+        console.log(`[CHORDS] Deck ${id}: ${chords.length} segments — ${chords.slice(0,4).map(c=>c.chord).join(' → ')}...`);
+      } catch (e) { console.warn('[CHORDS] Analysis failed:', e); }
+    }, 200);
   };
 
   const loadFromUrl = async (id: 'A' | 'B', url: string) => {
@@ -915,6 +925,15 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
       // Skip text-only refineBpmWithAi — multimodal analyzer below handles BPM correction
       analyzeStructureWithAi(id, fileName, audioBuffer.duration, detBpmUrl);
       analyzeTrackProfileWithAi(id, audioBuffer, fileName, detBpmUrl);
+      // Harmonic chord map
+      const setterUrl = id === 'A' ? setDeckA : setDeckB;
+      setTimeout(() => {
+        try {
+          const chords = analyzeChordMap(audioBuffer, detBpmUrl);
+          setterUrl(prev => ({ ...prev, chordMap: chords }));
+          console.log(`[CHORDS] Deck ${id}: ${chords.length} segments — ${chords.slice(0,4).map(c=>c.chord).join(' → ')}...`);
+        } catch (e) { console.warn('[CHORDS] Analysis failed:', e); }
+      }, 200);
     } catch (e: any) {
       console.error("Failed to load from URL:", e);
     }
@@ -1359,19 +1378,49 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
           ? `genre=${p.genre}, mood=${p.mood}, instruments=[${p.instruments.join(',')}], vocals=${p.vocalPresence}, energyArc=${p.energyArc}, bass=${p.bassWeight}, phase=${p.phase}, idealMixIn=${p.mixInTechnique}, idealMixOut=${p.mixOutTechnique}, notes="${p.notes}"`
           : 'profile=unavailable (use BPM + name only)';
 
+        // --- HARMONIC CONTEXT: chord progressions + best mix points ---
+        const fmtChords = (chords?: ChordSegment[]) => {
+          if (!chords?.length) return 'no disponible';
+          // Summarise: first 4 chords, last 4 chords, and a compact list of unique chords
+          const first4 = chords.slice(0, 4).map(c => c.chord).join('→');
+          const last4  = chords.slice(-4).map(c => c.chord).join('→');
+          const unique = [...new Set(chords.map(c => c.chord))].join(', ');
+          return `intro:[${first4}] ... outro:[${last4}] | palette:{${unique}}`;
+        };
+
+        const harmonicPoints: HarmonicMixPoint[] = findBestHarmonicMixPoints(
+          fromDeck.chordMap || [],
+          toDeck.chordMap   || [],
+        );
+        const fmtHarmonic = harmonicPoints.length
+          ? harmonicPoints.slice(0, 3).map(p =>
+              `A@${p.timeA.toFixed(0)}s(${p.chordA})→B@${p.timeB.toFixed(0)}s(${p.chordB}) score=${(p.score*100).toFixed(0)}%`
+            ).join(' | ')
+          : 'sin puntos compatibles detectados';
+
         const resp = await ai.models.generateContent({
           model: 'gemini-2.0-flash',
           contents: `${directorPrompt}
 
 DECK A (saliendo): "${fromDeck.trackName}", ${fromDeck.bpm.toFixed(1)} BPM, Key ${fromDeck.key || 'unknown'}
   AUDIO_PROFILE_A: ${fmtProfile(fromDeck.aiProfile)}
+  CHORD_MAP_A: ${fmtChords(fromDeck.chordMap)}
 
 DECK B (entrando): "${toDeck.trackName}", ${toDeck.bpm.toFixed(1)} BPM, Key ${toDeck.key || 'unknown'}
   AUDIO_PROFILE_B: ${fmtProfile(toDeck.aiProfile)}
+  CHORD_MAP_B: ${fmtChords(toDeck.chordMap)}
+
+HARMONIC_MIX_POINTS (mejores momentos por compatibilidad armónica):
+  ${fmtHarmonic}
 
 Contexto técnico: next marker A = ${nextMarker?.label || 'none'}, BPM ratio = ${(toDeck.bpm / fromDeck.bpm).toFixed(2)}
 
-INSTRUCCIÓN: usa los AUDIO_PROFILE para decidir la técnica más NATURAL — respeta los idealMixOut de A y idealMixIn de B cuando sean compatibles. Si los moods chocan (ej. euphoric → dark), usa filter_sweep para suavizar. Si vocals=lead en ambos, evita "blend" para no chocar voces.
+INSTRUCCIÓN: usa los AUDIO_PROFILE y CHORD_MAP para decidir la técnica más NATURAL.
+- Respeta los idealMixOut de A y idealMixIn de B cuando sean compatibles.
+- Si los HARMONIC_MIX_POINTS tienen score >= 80%, prioriza mezclar en esos momentos (actualiza mixPoint).
+- Si los moods chocan (ej. euphoric → dark), usa filter_sweep para suavizar.
+- Si vocals=lead en ambos, evita "blend" para no chocar voces.
+- Si los acordes finales de A son muy disonantes con los iniciales de B, usa echo_out o filter_sweep.
 
 Responde SOLO con este JSON (sin markdown):
 {"technique":"filter_sweep","transitionDuration":24,"bassSwapBeat":8,"advice":"MAX 6 PALABRAS MAYUSCULAS","energy":"maintain","mixPoint":"outro","warning":null}`,
@@ -2636,7 +2685,48 @@ function Deck({ id, state, currentTime, audioBuffer, setState, onLoad, onPlay, o
       ctx.textAlign = 'center';
       ctx.fillText(marker.label.toUpperCase(), mx, 10);
     });
-  }, [waveformPeaks, currentTime, audioBuffer, state.bpm, state.loopStart, state.loopEnd, state.structureMarkers]);
+
+    // Draw chord labels (bottom strip) — one label per 2-bar segment
+    if (state.chordMap && state.chordMap.length > 0) {
+      const duration2 = audioBuffer?.duration || 1;
+      ctx.font = '6px Arial Black';
+      ctx.textAlign = 'center';
+      // Only render chords that are visible in the canvas (avoid clutter)
+      const minSpacingPx = 28; // minimum pixels between chord labels
+      let lastLabelX = -minSpacingPx;
+
+      state.chordMap.forEach(seg => {
+        const cx = (seg.time / duration2) * canvas.width;
+        if (cx < 0 || cx > canvas.width) return;
+        if (cx - lastLabelX < minSpacingPx) return; // skip if too close
+        lastLabelX = cx;
+
+        const isMinor   = seg.quality === 'minor';
+        const alpha     = Math.max(0.35, seg.confidence);
+        const textColor = isMinor ? `rgba(255,100,180,${alpha})` : `rgba(100,220,255,${alpha})`;
+
+        // Tiny background pill
+        const tw = ctx.measureText(seg.chord).width;
+        ctx.fillStyle = `rgba(0,0,0,0.55)`;
+        ctx.fillRect(cx - tw / 2 - 2, canvas.height - 12, tw + 4, 10);
+
+        ctx.fillStyle = textColor;
+        ctx.fillText(seg.chord, cx, canvas.height - 4);
+
+        // Vertical tick at segment boundary
+        ctx.strokeStyle = textColor;
+        ctx.globalAlpha = 0.25;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([1, 3]);
+        ctx.beginPath();
+        ctx.moveTo(cx, canvas.height - 14);
+        ctx.lineTo(cx, canvas.height - 22);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+      });
+    }
+  }, [waveformPeaks, currentTime, audioBuffer, state.bpm, state.loopStart, state.loopEnd, state.structureMarkers, state.chordMap]);
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!audioBuffer) return;

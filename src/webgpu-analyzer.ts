@@ -282,6 +282,164 @@ async function analyzeGPU(device:GPUDevice, buffer:AudioBuffer): Promise<GPUAnal
   return {bpm, key, confidence, usedGPU:true};
 }
 
+// ─── HARMONIC ANALYSIS ───────────────────────────────────────────────────────
+
+const ROOT_NAMES = ['C','C#','D','Eb','E','F','F#','G','Ab','A','Bb','B'];
+
+// Chord templates: 1.0 = root, 0.9 = fifth, 0.8 = third
+function buildChordTemplates() {
+  const out: { name: string; root: number; quality: 'major'|'minor'; template: number[] }[] = [];
+  for (let r = 0; r < 12; r++) {
+    const maj = new Array(12).fill(0);
+    maj[r]              = 1.0;
+    maj[(r + 4) % 12]   = 0.8; // major third
+    maj[(r + 7) % 12]   = 0.9; // perfect fifth
+    out.push({ name: ROOT_NAMES[r] + 'maj', root: r, quality: 'major', template: maj });
+
+    const min = new Array(12).fill(0);
+    min[r]              = 1.0;
+    min[(r + 3) % 12]   = 0.8; // minor third
+    min[(r + 7) % 12]   = 0.9; // perfect fifth
+    out.push({ name: ROOT_NAMES[r] + 'm', root: r, quality: 'minor', template: min });
+  }
+  return out;
+}
+const CHORD_TEMPLATES = buildChordTemplates();
+
+// Extract a 12-element normalised chroma vector from one audio segment.
+// Uses a single FFT frame (frameSize=512) centred on the segment for speed.
+function extractSegmentChroma(samples: Float32Array, sr: number): Float32Array {
+  const frameSize = 512;
+  const chroma = new Float32Array(12).fill(0);
+  const mid    = Math.max(0, Math.floor(samples.length / 2) - frameSize);
+
+  for (let bin = 1; bin < frameSize / 2; bin++) {
+    const freq = bin * sr / frameSize;
+    if (freq < 65 || freq > 4000) continue;           // C2 – ~C7
+    const midi = 12 * Math.log2(freq / 440) + 69;
+    const pc   = ((Math.round(midi) % 12) + 12) % 12;
+    let re = 0, im = 0;
+    for (let n = 0; n < frameSize; n++) {
+      if (mid + n >= samples.length) break;
+      const w = 0.5 * (1 - Math.cos(2 * Math.PI * n / (frameSize - 1)));
+      const a = 2 * Math.PI * bin * n / frameSize;
+      re += samples[mid + n] * w * Math.cos(a);
+      im -= samples[mid + n] * w * Math.sin(a);
+    }
+    chroma[pc] += Math.sqrt(re * re + im * im);
+  }
+  const mx = Math.max(...chroma);
+  if (mx > 0) for (let i = 0; i < 12; i++) chroma[i] /= mx;
+  return chroma;
+}
+
+// Match a chroma vector against all 24 chord templates (cosine similarity).
+function matchChord(chroma: Float32Array) {
+  let bestScore = -1;
+  let best = CHORD_TEMPLATES[0];
+  for (const tmpl of CHORD_TEMPLATES) {
+    let dot = 0, tNorm = 0, cNorm = 0;
+    for (let i = 0; i < 12; i++) {
+      dot   += chroma[i] * tmpl.template[i];
+      tNorm += tmpl.template[i] * tmpl.template[i];
+      cNorm += chroma[i] * chroma[i];
+    }
+    const score = dot / (Math.sqrt(tNorm) * Math.sqrt(cNorm) + 1e-10);
+    if (score > bestScore) { bestScore = score; best = tmpl; }
+  }
+  return { chord: best.name, root: best.root, quality: best.quality,
+           confidence: Math.max(0, Math.min(1, bestScore)) };
+}
+
+// Harmonic compatibility 0-1 between two chord segments.
+function chordCompatibilityScore(a: ChordSegment, b: ChordSegment): number {
+  if (a.chord === b.chord) return 1.0;           // identical
+  if (a.root  === b.root)  return 0.85;           // parallel maj/min
+  // Relative major/minor  (e.g. C major ↔ A minor)
+  if (a.quality === 'major' && b.quality === 'minor' && b.root === (a.root + 9) % 12) return 0.90;
+  if (a.quality === 'minor' && b.quality === 'major' && b.root === (a.root + 3) % 12) return 0.90;
+  // Circle of fifths neighbours (dominant / subdominant)
+  const dom = (a.root + 7) % 12;
+  const sub = (a.root + 5) % 12;
+  if (b.root === dom || b.root === sub) return a.quality === b.quality ? 0.75 : 0.60;
+  // Chroma cosine fallback
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < 12; i++) { dot += a.chroma[i]*b.chroma[i]; na += a.chroma[i]**2; nb += b.chroma[i]**2; }
+  return Math.max(0, (dot / (Math.sqrt(na)*Math.sqrt(nb) + 1e-10)) * 0.5);
+}
+
+// ─── Public chord types & functions ──────────────────────────────────────────
+
+export interface ChordSegment {
+  time:       number;              // start time in seconds
+  duration:   number;              // segment length in seconds
+  chord:      string;              // e.g. "Amaj", "Fm"
+  root:       number;              // 0-11 (C=0)
+  quality:    'major' | 'minor';
+  chroma:     number[];            // normalised 12-element vector
+  confidence: number;              // 0-1
+}
+
+export interface HarmonicMixPoint {
+  timeA:  number;   // best mix-out position in track A (seconds)
+  timeB:  number;   // best mix-in  position in track B (seconds)
+  chordA: string;
+  chordB: string;
+  score:  number;   // 0-1
+}
+
+/**
+ * Analyses a full AudioBuffer and returns a chord map (one entry per 2-bar segment).
+ * Runs on CPU synchronously — typically < 300 ms for a 6-minute track.
+ */
+export function analyzeChordMap(buffer: AudioBuffer, bpm: number): ChordSegment[] {
+  const sr          = buffer.sampleRate;
+  const data        = buffer.getChannelData(0);
+  const beatSecs    = 60 / (bpm > 0 ? bpm : 128);
+  const segDuration = beatSecs * 8;   // 2 bars = 8 beats
+  const segments: ChordSegment[] = [];
+
+  for (let t = 0; t + segDuration <= buffer.duration; t += segDuration) {
+    const s0  = Math.floor(t * sr);
+    const s1  = Math.min(data.length, Math.floor((t + segDuration) * sr));
+    const seg = data.subarray(s0, s1);
+    const chroma = extractSegmentChroma(seg, sr);
+    const { chord, root, quality, confidence } = matchChord(chroma);
+    segments.push({ time: t, duration: segDuration, chord, root, quality,
+                    chroma: Array.from(chroma), confidence });
+  }
+  return segments;
+}
+
+/**
+ * Finds the top harmonic mix points between an outgoing (A) and incoming (B) track.
+ * Compares A's outro zone against B's intro zone and scores chord compatibility.
+ */
+export function findBestHarmonicMixPoints(
+  chordsA: ChordSegment[],
+  chordsB: ChordSegment[],
+): HarmonicMixPoint[] {
+  if (!chordsA.length || !chordsB.length) return [];
+
+  // Outro of A = last 40%,  Intro of B = first 25%
+  const outroA = chordsA.slice(Math.floor(chordsA.length * 0.60));
+  const introB = chordsB.slice(0, Math.ceil(chordsB.length  * 0.25));
+
+  const results: HarmonicMixPoint[] = [];
+  for (const cA of outroA) {
+    for (const cB of introB) {
+      const score = chordCompatibilityScore(cA, cB);
+      if (score >= 0.55) {
+        results.push({ timeA: cA.time, timeB: cB.time,
+                       chordA: cA.chord, chordB: cB.chord, score });
+      }
+    }
+  }
+  return results.sort((a, b) => b.score - a.score).slice(0, 5);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * Main entry point.
  * Tries GPU first; falls back to CPU (existing web-audio-beat-detector for BPM + CPU chroma for key).
