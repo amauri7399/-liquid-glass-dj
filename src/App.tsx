@@ -369,6 +369,7 @@ interface DeckState {
   chordMap?: ChordSegment[];  // harmonic chord analysis per 2-bar segment
   fxReverb: number;  // 0-1 wet amount
   fxDelay: number;   // 0-1 wet amount
+  filterKnob: number;  // 0..1 — 0.5=bypass, <0.5=LPF sweep, >0.5=HPF sweep
 }
 
 // Harmonic Compatibility (Camelot Wheel)
@@ -492,8 +493,8 @@ export default function App() {
   const [crossfader, setCrossfader] = useState(0.5); // 0 to 1
 
   // Decks Management
-  const [deckA, setDeckA] = useState<DeckState>({ id: 'A', isPlaying: false, trackName: '', playbackRate: 1, bend: 0, gain: 0.8, low: 0, mid: 0, high: 0, bpm: 128, baseBpm: 128, cuePoint: 0, hotCues: [null, null, null, null], isAnalyzing: false, syncLocked: false, isMaster: false, key: '8A', pitchCurve: 'linear', loopStart: null, loopEnd: null, isLooping: false, structureMarkers: [], fxReverb: 0, fxDelay: 0 });
-  const [deckB, setDeckB] = useState<DeckState>({ id: 'B', isPlaying: false, trackName: '', playbackRate: 1, bend: 0, gain: 0.8, low: 0, mid: 0, high: 0, bpm: 128, baseBpm: 128, cuePoint: 0, hotCues: [null, null, null, null], isAnalyzing: false, syncLocked: false, isMaster: false, key: '3B', pitchCurve: 'linear', loopStart: null, loopEnd: null, isLooping: false, structureMarkers: [], fxReverb: 0, fxDelay: 0 });
+  const [deckA, setDeckA] = useState<DeckState>({ id: 'A', isPlaying: false, trackName: '', playbackRate: 1, bend: 0, gain: 0.8, low: 0, mid: 0, high: 0, bpm: 128, baseBpm: 128, cuePoint: 0, hotCues: [null, null, null, null], isAnalyzing: false, syncLocked: false, isMaster: false, key: '8A', pitchCurve: 'linear', loopStart: null, loopEnd: null, isLooping: false, structureMarkers: [], fxReverb: 0, fxDelay: 0, filterKnob: 0.5 });
+  const [deckB, setDeckB] = useState<DeckState>({ id: 'B', isPlaying: false, trackName: '', playbackRate: 1, bend: 0, gain: 0.8, low: 0, mid: 0, high: 0, bpm: 128, baseBpm: 128, cuePoint: 0, hotCues: [null, null, null, null], isAnalyzing: false, syncLocked: false, isMaster: false, key: '3B', pitchCurve: 'linear', loopStart: null, loopEnd: null, isLooping: false, structureMarkers: [], fxReverb: 0, fxDelay: 0, filterKnob: 0.5 });
   const [isAiMixing, setIsAiMixing] = useState(false);
 
   // Poll RAM (Chrome performance.memory) + estimate GPU load
@@ -816,13 +817,14 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
     crossGain: GainNode | null;
     filters: BiquadFilterNode[];
     highPass: BiquadFilterNode | null;
+    djFilter: BiquadFilterNode | null;
     delayNode: DelayNode | null;
     delayWet: GainNode | null;
     delayFeedback: GainNode | null;
     reverbNode: ConvolverNode | null;
     reverbWet: GainNode | null;
   }>({ source: null, analyser: null, gain: null, crossGain: null, filters: [], highPass: null,
-       delayNode: null, delayWet: null, delayFeedback: null, reverbNode: null, reverbWet: null });
+       djFilter: null, delayNode: null, delayWet: null, delayFeedback: null, reverbNode: null, reverbWet: null });
   const nodesB = useRef<{
     source: AudioBufferSourceNode | null;
     analyser: AnalyserNode | null;
@@ -830,13 +832,14 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
     crossGain: GainNode | null;
     filters: BiquadFilterNode[];
     highPass: BiquadFilterNode | null;
+    djFilter: BiquadFilterNode | null;
     delayNode: DelayNode | null;
     delayWet: GainNode | null;
     delayFeedback: GainNode | null;
     reverbNode: ConvolverNode | null;
     reverbWet: GainNode | null;
   }>({ source: null, analyser: null, gain: null, crossGain: null, filters: [], highPass: null,
-       delayNode: null, delayWet: null, delayFeedback: null, reverbNode: null, reverbWet: null });
+       djFilter: null, delayNode: null, delayWet: null, delayFeedback: null, reverbNode: null, reverbWet: null });
   const buffers = useRef<{ A: AudioBuffer | null, B: AudioBuffer | null }>({ A: null, B: null });
 
   // --- AUDIO SETUP ---
@@ -885,10 +888,16 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
     const gain = audioCtx.current.createGain();
     const crossGain = audioCtx.current.createGain();
 
-    // Chain: Filters -> HighPass -> Analyser -> Gain -> CrossGain -> Master
+    const djFilter = audioCtx.current.createBiquadFilter();
+    djFilter.type = 'lowpass';
+    djFilter.frequency.value = 22050; // Start bypassed (LPF at max = all passes)
+    djFilter.Q.value = 0.7;
+
+    // Chain: Filters -> DJFilter -> HighPass -> Analyser -> Gain -> CrossGain -> Master
     lowFilter.connect(midFilter);
     midFilter.connect(highFilter);
-    highFilter.connect(highPass);
+    highFilter.connect(djFilter);
+    djFilter.connect(highPass);
     highPass.connect(analyser);
     analyser.connect(gain);
     gain.connect(crossGain);
@@ -920,7 +929,7 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
     reverbWet.connect(masterGain.current);
 
     return { analyser, gain, crossGain, filters: [lowFilter, midFilter, highFilter], highPass,
-             delayNode, delayWet, delayFeedback, reverbNode, reverbWet };
+             djFilter, delayNode, delayWet, delayFeedback, reverbNode, reverbWet };
   };
 
   // --- RECORDING ---
@@ -1851,6 +1860,48 @@ Responde SOLO con este JSON (sin markdown):
     if (nodesB.current.reverbWet) nodesB.current.reverbWet.gain.setTargetAtTime(deckB.fxReverb, t, 0.05);
   }, [deckB.fxDelay, deckB.fxReverb]);
 
+  // Filter knob Deck A
+  useEffect(() => {
+    if (!audioCtx.current) return;
+    const node = nodesA.current.djFilter;
+    if (!node) return;
+    const t = audioCtx.current.currentTime;
+    const k = deckA.filterKnob;
+    if (Math.abs(k - 0.5) < 0.01) {
+      node.type = 'lowpass';
+      node.frequency.setTargetAtTime(22050, t, 0.02);
+    } else if (k < 0.5) {
+      node.type = 'lowpass';
+      const freq = 80 * Math.pow(22050 / 80, k * 2);
+      node.frequency.setTargetAtTime(Math.max(20, freq), t, 0.02);
+    } else {
+      node.type = 'highpass';
+      const freq = 20 * Math.pow(22000 / 20, (k - 0.5) * 2);
+      node.frequency.setTargetAtTime(Math.min(22000, freq), t, 0.02);
+    }
+  }, [deckA.filterKnob]);
+
+  // Filter knob Deck B
+  useEffect(() => {
+    if (!audioCtx.current) return;
+    const node = nodesB.current.djFilter;
+    if (!node) return;
+    const t = audioCtx.current.currentTime;
+    const k = deckB.filterKnob;
+    if (Math.abs(k - 0.5) < 0.01) {
+      node.type = 'lowpass';
+      node.frequency.setTargetAtTime(22050, t, 0.02);
+    } else if (k < 0.5) {
+      node.type = 'lowpass';
+      const freq = 80 * Math.pow(22050 / 80, k * 2);
+      node.frequency.setTargetAtTime(Math.max(20, freq), t, 0.02);
+    } else {
+      node.type = 'highpass';
+      const freq = 20 * Math.pow(22000 / 20, (k - 0.5) * 2);
+      node.frequency.setTargetAtTime(Math.min(22000, freq), t, 0.02);
+    }
+  }, [deckB.filterKnob]);
+
   // ═══════════════════════════════════════════════
   // AUTOPILOT ENGINE — lógica real de mezcla automática
   // ═══════════════════════════════════════════════
@@ -2778,7 +2829,85 @@ function JogWheel({
   );
 }
 
-function Deck({ id, state, currentTime, audioBuffer, setState, onLoad, onPlay, onSeek, onCue, onCueDown, onCueUp, onHotCue, onSync, onToggleMaster, onSetLoop, analyser }: { 
+function TrackOverview({ buffer, currentTime, color, onSeek }: {
+  buffer: AudioBuffer | null;
+  currentTime: number;
+  color: string;
+  onSeek: (t: number) => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [peaks, setPeaks] = useState<number[]>([]);
+
+  useEffect(() => {
+    if (!buffer) { setPeaks([]); return; }
+    const data = buffer.getChannelData(0);
+    const N = 400;
+    const blockSize = Math.floor(data.length / N);
+    const p: number[] = [];
+    for (let i = 0; i < N; i++) {
+      let max = 0;
+      for (let j = 0; j < blockSize; j++) {
+        const v = Math.abs(data[i * blockSize + j]);
+        if (v > max) max = v;
+      }
+      p.push(max);
+    }
+    const maxP = Math.max(...p, 0.001);
+    setPeaks(p.map(v => v / maxP));
+  }, [buffer]);
+
+  useEffect(() => {
+    if (!canvasRef.current || peaks.length === 0) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const duration = buffer?.duration || 1;
+    const progress = currentTime / duration;
+    const playX = progress * canvas.width;
+    const barW = canvas.width / peaks.length;
+    peaks.forEach((peak, i) => {
+      const x = i * barW;
+      const isPlayed = x < playX;
+      const barH = Math.max(1, peak * canvas.height * 0.85);
+      ctx.fillStyle = isPlayed ? color : 'rgba(255,255,255,0.12)';
+      ctx.fillRect(x, (canvas.height - barH) / 2, Math.max(0.5, barW - 0.5), barH);
+    });
+    // Playhead line
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.moveTo(playX, 0);
+    ctx.lineTo(playX, canvas.height);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }, [peaks, currentTime, buffer, color]);
+
+  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!buffer || !canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    onSeek((x / rect.width) * buffer.duration);
+  };
+
+  if (!buffer) return null;
+
+  return (
+    <div className="w-full px-3 pt-1">
+      <canvas
+        ref={canvasRef}
+        width={800}
+        height={20}
+        className="w-full h-5 cursor-pointer rounded-sm opacity-80 hover:opacity-100 transition-opacity"
+        onClick={handleClick}
+        title="Click to seek"
+      />
+    </div>
+  );
+}
+
+function Deck({ id, state, currentTime, audioBuffer, setState, onLoad, onPlay, onSeek, onCue, onCueDown, onCueUp, onHotCue, onSync, onToggleMaster, onSetLoop, analyser }: {
   id: 'A' | 'B', 
   state: DeckState, 
   currentTime: number,
@@ -3155,13 +3284,21 @@ function Deck({ id, state, currentTime, audioBuffer, setState, onLoad, onPlay, o
           />
         </div>
 
+        {/* Track Overview Waveform */}
+        <TrackOverview
+          buffer={audioBuffer}
+          currentTime={currentTime}
+          color={id === 'A' ? '#00f2ff' : '#ffcc00'}
+          onSeek={onSeek}
+        />
+
         {/* Waveform Window */}
         <div className="flex-1 min-h-[50px] bg-black/60 border border-[#222] rounded-sm relative overflow-hidden group cursor-pointer shadow-[inset_0_0_20px_rgba(0,0,0,0.8)]">
-          <canvas 
-            ref={canvasRef} 
-            className="w-full h-full" 
-            width={600} 
-            height={120} 
+          <canvas
+            ref={canvasRef}
+            className="w-full h-full"
+            width={600}
+            height={120}
             onMouseDown={handleMouseDown}
           />
           
@@ -3205,6 +3342,25 @@ function Deck({ id, state, currentTime, audioBuffer, setState, onLoad, onPlay, o
                 className={`h-7 border border-white/5 rounded-sm text-[9px] font-bold transition-all ${state.hotCues[i] !== null ? 'bg-[#39ff14]/30 border-[#39ff14]/50 text-[#39ff14] shadow-[0_0_8px_rgba(57,255,20,0.2)]' : 'bg-white/5 text-white/20 hover:bg-white/10'}`}
               >
                 {i + 1}
+              </button>
+            ))}
+          </div>
+
+          {/* Beat Jump */}
+          <div className="grid grid-cols-6 gap-0.5">
+            {([-4, -2, -1, 1, 2, 4] as const).map(bars => (
+              <button
+                key={bars}
+                onClick={() => {
+                  if (!audioBuffer) return;
+                  const barDuration = (60 / (state.bpm || 128)) * 4;
+                  const target = Math.max(0, Math.min(audioBuffer.duration, currentTime + bars * barDuration));
+                  onSeek(target);
+                }}
+                className="h-6 border border-white/5 rounded-sm text-[7px] font-bold bg-white/5 hover:bg-white/10 text-white/40 hover:text-white/70 transition-all active:bg-white/20"
+                title={`Jump ${bars > 0 ? '+' : ''}${bars} bars`}
+              >
+                {bars < 0 ? `◄${Math.abs(bars)}` : `${bars}►`}
               </button>
             ))}
           </div>
@@ -3277,6 +3433,14 @@ function Deck({ id, state, currentTime, audioBuffer, setState, onLoad, onPlay, o
           <div className="flex gap-2 items-center justify-center mt-1 border-t border-white/5 pt-1">
             <span className="text-[7px] font-bold opacity-30 uppercase tracking-widest">FX</span>
             <div className="flex gap-3">
+              <Knob
+                label="FILTER"
+                min={0} max={1}
+                defaultValue={0.5}
+                value={state.filterKnob}
+                onChange={(v) => setState(p => ({ ...p, filterKnob: v }))}
+                color={state.filterKnob < 0.45 ? '#ff6600' : state.filterKnob > 0.55 ? '#cc44ff' : '#555555'}
+              />
               <Knob
                 label="REVERB"
                 min={0} max={1}
