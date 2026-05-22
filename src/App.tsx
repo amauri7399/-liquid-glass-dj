@@ -523,6 +523,7 @@ export default function App() {
   // --- AI AUTOPILOT STATE ---
   const [showAutopilot, setShowAutopilot] = useState(false);
   const [showPromptGuide, setShowPromptGuide] = useState(false);
+  const [autopilotStartIndex, setAutopilotStartIndex] = useState(0);
   const [playlist, setPlaylist] = useState<File[]>([]);
   const playlistRef = useRef<File[]>([]);
   useEffect(() => { playlistRef.current = playlist; }, [playlist]);
@@ -565,6 +566,15 @@ Huella sonora: kicks rápidos y duros, bajos rodantes ("rollers"), energía danc
 Artistas: Influx Datum, High Contrast, Fred V, Inja x Whiney, L-Side & MC Fats, Alibi, DJ Marky, S.P.Y, DJ Fresh, Lenny Fontana
 Técnica: "filter_sweep" agresivo o "blend" — energía DEBE subir
 Params: transitionDuration 16-24, bassSwapBeat 8, energy "boost", mixPoint "post_drop" o "outro"
+
+══ REGLAS DE RATIO DE BPM ══
+
+(El sistema ya aplica estas reglas en el código, pero la IA debe reflejarlas en su plan)
+Ratio < 1.15: sync posible → blend o filter_sweep normal
+Ratio 1.15-1.5: diferencia media → filter_sweep preferido, cap transitionDuration 20
+Ratio 1.5-1.8: diferencia grande → echo_out obligatorio, cap transitionDuration 10
+Ratio 1.8-2.2 (halftime/doubletime): cut limpio en el doble tiempo — NO blend
+Ratio > 2.5: echo_out ultrarrápido (transitionDuration 4) + warning
 
 ══ REGLAS ENTRE FASES ══
 
@@ -1761,6 +1771,38 @@ Responde SOLO con este JSON (sin markdown):
       }
     }
 
+    // ── BPM RATIO ENFORCEMENT ──────────────────────────────────────────────────
+    // Override AI plan technique/duration when BPM difference is too large to blend musically.
+    // Ratios calculated as incoming / outgoing (> 1 means incoming is faster).
+    const bpmRatio = fromDeck.bpm > 0 && toDeck.bpm > 0
+      ? toDeck.bpm / fromDeck.bpm
+      : 1;
+    const isHalftime = (bpmRatio >= 1.80 && bpmRatio <= 2.25) || (bpmRatio >= 0.44 && bpmRatio <= 0.56);
+
+    if (bpmRatio > 2.5 || bpmRatio < 0.4) {
+      // Extreme jump — instant echo out, no blend possible
+      plan.technique = 'echo_out';
+      plan.transitionDuration = 4;
+      plan.bassSwapBeat = 2;
+      plan.warning = 'BPM RATIO EXTREMO — CORTE RAPIDO';
+    } else if (isHalftime) {
+      // Classic halftime/doubletime relationship (e.g. 87 → 174) — clean cut at the double beat
+      plan.technique = 'cut';
+      plan.transitionDuration = 8;
+      plan.bassSwapBeat = 4;
+      plan.advice = plan.advice || 'HALFTIME CUT DOBLE TIEMPO';
+    } else if (bpmRatio > 1.5 || bpmRatio < 0.67) {
+      // Large jump — force echo_out and cap duration
+      if (plan.technique === 'blend') plan.technique = 'echo_out';
+      plan.transitionDuration = Math.min(plan.transitionDuration, 10);
+      plan.warning = plan.warning || `DELTA BPM ALTO x${bpmRatio.toFixed(2)}`;
+    } else if (bpmRatio > 1.15 || bpmRatio < 0.87) {
+      // Medium jump — prefer filter_sweep over blend, cap duration
+      if (plan.technique === 'blend') plan.technique = 'filter_sweep';
+      plan.transitionDuration = Math.min(plan.transitionDuration, 20);
+    }
+    // ──────────────────────────────────────────────────────────────────────────
+
     const warningText = plan.warning ? ` ⚠ ${plan.warning}` : '';
     setAiMixAdvice(`${plan.technique.toUpperCase().replace('_',' ')} — ${plan.advice}${warningText}`);
 
@@ -1804,6 +1846,24 @@ Responde SOLO con este JSON (sin markdown):
         fromNodes.filters[0].gain.linearRampToValueAtTime(-24, swapTime);
 
         const sweepEnd = now + duration;
+
+        // ── BPM BRIDGING ──────────────────────────────────────────────────────
+        // When BPM difference is significant (ratio > 1.15), ramp the outgoing deck's
+        // playback rate slightly upward during echo_out/filter_sweep so it "spins towards"
+        // the incoming tempo — makes the drop feel intentional, not jarring.
+        if ((bpmRatio > 1.15 || bpmRatio < 0.87) && !isHalftime
+            && (plan.technique === 'echo_out' || plan.technique === 'filter_sweep')) {
+          const fromSource = fromNodes.source;
+          if (fromSource) {
+            const currentRate = fromDeck.playbackRate + fromDeck.bend;
+            // Nudge outgoing towards incoming tempo, capped at +12%
+            const bridge = Math.min(currentRate * bpmRatio, currentRate * 1.12);
+            fromSource.playbackRate.setValueAtTime(currentRate, now);
+            fromSource.playbackRate.linearRampToValueAtTime(bridge, now + duration * 0.5);
+            fromSource.playbackRate.linearRampToValueAtTime(currentRate * 0.6, sweepEnd);
+          }
+        }
+        // ─────────────────────────────────────────────────────────────────────
 
         if (plan.technique === 'cut') {
           // Hard cut at next downbeat
@@ -2063,18 +2123,19 @@ Responde SOLO con este JSON (sin markdown):
       mixTriggeredRef.current = false;
       return;
     }
-    playlistIndexRef.current = 0;
+    const startIdx = Math.max(0, Math.min(autopilotStartIndex, playlist.length - 1));
+    playlistIndexRef.current = startIdx;
     autopilotActiveDeckRef.current = 'A';
     setAutopilotActiveDeckUI('A');
     mixTriggeredRef.current = false;
 
-    // Cargar track 0 → Deck A
-    loadTrack('A', playlist[0]);
+    // Cargar track startIdx → Deck A
+    loadTrack('A', playlist[startIdx]);
 
-    // Pre-cargar track 1 → Deck B
-    if (playlist.length > 1) {
-      playlistIndexRef.current = 1;
-      loadTrack('B', playlist[1]);
+    // Pre-cargar track startIdx+1 → Deck B
+    if (playlist.length > startIdx + 1) {
+      playlistIndexRef.current = startIdx + 1;
+      loadTrack('B', playlist[startIdx + 1]);
     }
 
     // Poll cada 500ms hasta que llegue el aiProfile del primer track O timeout 20s.
@@ -2821,12 +2882,28 @@ Responde SOLO con este JSON (sin markdown):
                 );
               })()}
 
+              {/* Start from track N */}
+              {!isAutopilotActive && playlist.length > 1 && (
+                <div className="flex items-center gap-2">
+                  <label className="text-[9px] font-bold tracking-widest text-[#555] uppercase whitespace-nowrap">Empezar en track</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={playlist.length}
+                    value={autopilotStartIndex + 1}
+                    onChange={e => setAutopilotStartIndex(Math.max(0, Math.min(parseInt(e.target.value) - 1 || 0, playlist.length - 1)))}
+                    className="w-14 bg-[#121212] border border-white/10 rounded px-2 py-1 text-[10px] font-mono text-white text-center focus:outline-none focus:border-[#39ff14]/50"
+                  />
+                  <span className="text-[9px] text-[#444]">/ {playlist.length}</span>
+                </div>
+              )}
+
               {/* Master Control */}
               <button
                 onClick={() => setIsAutopilotActive(!isAutopilotActive)}
                 className={`w-full py-3 rounded-lg text-xs font-black tracking-widest uppercase transition-all shadow-[4px_4px_8px_#0b0b0d,-4px_-4px_8px_#252527] border ${isAutopilotActive ? 'bg-[#39ff14] text-black border-[#39ff14] shadow-[0_0_15px_#39ff14]' : 'bg-[#1a1a1c] text-[#888] border-white/5 hover:text-white active:shadow-[inset_4px_4px_8px_#0b0b0d]'}`}
               >
-                {isAutopilotActive ? '⬛ STOP AUTOPILOT' : '▶ START AUTOPILOT'}
+                {isAutopilotActive ? '⬛ STOP AUTOPILOT' : `▶ START${autopilotStartIndex > 0 ? ` DESDE #${autopilotStartIndex + 1}` : ' AUTOPILOT'}`}
               </button>
 
             </div>
