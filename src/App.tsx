@@ -522,6 +522,7 @@ export default function App() {
   
   // --- AI AUTOPILOT STATE ---
   const [showAutopilot, setShowAutopilot] = useState(false);
+  const [showPromptGuide, setShowPromptGuide] = useState(false);
   const [playlist, setPlaylist] = useState<File[]>([]);
   const playlistRef = useRef<File[]>([]);
   useEffect(() => { playlistRef.current = playlist; }, [playlist]);
@@ -2642,7 +2643,14 @@ Responde SOLO con este JSON (sin markdown):
               
               {/* Prompt Section */}
               <div className="flex flex-col gap-2">
-                <label className="text-[9px] font-bold tracking-widest text-[#888] uppercase">Director's Prompt</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-[9px] font-bold tracking-widest text-[#888] uppercase">Director's Prompt</label>
+                  <button
+                    onClick={() => setShowPromptGuide(true)}
+                    className="w-5 h-5 rounded-full border border-[#39ff14]/40 text-[#39ff14] text-[9px] font-black hover:bg-[#39ff14]/10 transition-all flex items-center justify-center"
+                    title="Ver guía de uso del prompt"
+                  >?</button>
+                </div>
                 <textarea
                   className="w-full h-24 bg-[#121212] border border-white/5 rounded-lg p-2 text-xs text-[#ccc] focus:outline-none focus:border-[#39ff14]/50 shadow-[inset_2px_2px_5px_#0a0a0a] resize-none"
                   value={directorPrompt}
@@ -2911,6 +2919,165 @@ Responde SOLO con este JSON (sin markdown):
         </div>
 
       </footer>
+
+      {/* ── DIRECTOR PROMPT GUIDE MODAL ── */}
+      <AnimatePresence>
+        {showPromptGuide && (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setShowPromptGuide(false)}
+          >
+            {/* Backdrop */}
+            <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
+
+            {/* Modal */}
+            <motion.div
+              className="relative z-10 w-full max-w-2xl max-h-[85vh] bg-[#1a1a1c] border border-[#39ff14]/20 rounded-2xl shadow-[0_0_60px_rgba(57,255,20,0.1)] overflow-hidden flex flex-col"
+              initial={{ scale: 0.92, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.92, y: 20 }}
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-white/5 bg-[#111]">
+                <div>
+                  <h2 className="text-[13px] font-black tracking-widest text-[#39ff14] uppercase">Guía del Director's Prompt</h2>
+                  <p className="text-[9px] text-white/40 mt-0.5 tracking-wider">Cómo personalizar la IA para tu colección de música</p>
+                </div>
+                <button
+                  onClick={() => setShowPromptGuide(false)}
+                  className="w-7 h-7 rounded-full border border-white/10 text-white/40 hover:text-white hover:border-white/30 text-sm flex items-center justify-center transition-all"
+                >✕</button>
+              </div>
+
+              {/* Scrollable Content */}
+              <div className="flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-5 text-[11px] text-white/70 leading-relaxed">
+
+                {/* Qué es */}
+                <section>
+                  <h3 className="text-[10px] font-black uppercase tracking-widest text-[#39ff14] mb-2">¿Qué hace el prompt?</h3>
+                  <p>Le dice a Gemini cómo clasificar y mezclar tus canciones. El sistema ya le manda el BPM, key, perfil de audio y acordes — tú le das el <strong className="text-white">contexto de tu set</strong>: qué géneros tienes, qué energía quieres, qué artistas son de cada fase.</p>
+                </section>
+
+                {/* Datos que recibe */}
+                <section>
+                  <h3 className="text-[10px] font-black uppercase tracking-widest text-[#00f2ff] mb-2">Datos que el sistema ya le envía (no necesitas repetirlos)</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      ['AUDIO_PROFILE.phase', 'Fase 1-4 detectada por escucha'],
+                      ['AUDIO_PROFILE.realBpm', 'BPM real estimado por IA'],
+                      ['AUDIO_PROFILE.vocalPresence', 'none / background / lead'],
+                      ['AUDIO_PROFILE.bassWeight', 'sub / punchy / light'],
+                      ['AUDIO_PROFILE.energyArc', 'building / sustained / descending'],
+                      ['CHORD_MAP', 'Progresión de acordes detectada'],
+                      ['HARMONIC_MIX_POINTS', 'Mejores momentos de cruce armónico'],
+                      ['BPM + Key', 'Con etiqueta [detector] o [AI-corregido]'],
+                    ].map(([k, v]) => (
+                      <div key={k} className="bg-[#111] rounded-lg p-2 border border-white/5">
+                        <div className="text-[9px] font-mono text-[#ffcc00]">{k}</div>
+                        <div className="text-[9px] text-white/50 mt-0.5">{v}</div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                {/* Estructura */}
+                <section>
+                  <h3 className="text-[10px] font-black uppercase tracking-widest text-[#ff00f0] mb-2">Estructura del prompt (plantilla)</h3>
+                  <pre className="bg-[#0a0a0a] border border-white/5 rounded-xl p-4 text-[9px] font-mono text-white/60 overflow-x-auto whitespace-pre-wrap leading-5">{`Eres el "Director Automático", experto en [TU GÉNERO].
+Tu único output es JSON válido sin markdown.
+
+══ FASES DE TU SET ══
+
+FASE 1 — [Nombre] ([BPM range])
+Artistas de tu colección: [Artista1, Artista2...]
+Técnica: "cut" | "echo_out" | "blend" | "filter_sweep"
+Params: transitionDuration [8-32], bassSwapBeat [4-16],
+        energy "drop"|"maintain"|"boost",
+        mixPoint "early_cut"|"mid_break"|"post_drop"|"outro"
+
+FASE 2 — [Nombre] ([BPM range])
+[...repetir por cada fase...]
+
+══ REGLAS ENTRE FASES ══
+
+FASE1 → FASE2: [técnica y params]
+Salto extremo: echo_out rápido
+
+══ REGLAS ARMÓNICAS ══
+
+Score ≥ 80%: priorizar punto de cruce armónico
+Score < 55%: filter_sweep o echo_out
+Vocal lead en ambas: NUNCA blend
+
+FORMATO: JSON sin markdown.`}</pre>
+                </section>
+
+                {/* Técnicas */}
+                <section>
+                  <h3 className="text-[10px] font-black uppercase tracking-widest text-[#39ff14] mb-2">Técnicas disponibles</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      ['blend', 'Crossfade largo y suave. Ideal para géneros melódicos o cuando los acordes son compatibles.'],
+                      ['filter_sweep', 'Barrido high-pass en saliente + rampa en entrante. Limpia el espacio espectral.'],
+                      ['echo_out', 'High-pass agresivo + fade rápido. Para salir de pistas con sub-bajos densos.'],
+                      ['cut', 'Corte duro en el siguiente tiempo cuantizado. Para transiciones técnicas o agresivas.'],
+                    ].map(([t, d]) => (
+                      <div key={t} className="bg-[#111] rounded-lg p-2 border border-white/5">
+                        <div className="text-[9px] font-mono font-black text-[#ff00f0]">"{t}"</div>
+                        <div className="text-[9px] text-white/50 mt-0.5">{d}</div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                {/* mixPoint */}
+                <section>
+                  <h3 className="text-[10px] font-black uppercase tracking-widest text-[#ffcc00] mb-2">Valores de mixPoint</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      ['early_cut', '40% de la pista — corte temprano, pistas cortas o repetitivas'],
+                      ['mid_break', '50% — en el break central, géneros con bajos densos'],
+                      ['post_drop', '65% — después del segundo drop, máxima energía'],
+                      ['outro', '70% — pistas con outro definido (Liquid D&B por defecto)'],
+                    ].map(([v, d]) => (
+                      <div key={v} className="bg-[#111] rounded-lg p-2 border border-white/5">
+                        <div className="text-[9px] font-mono text-[#ffcc00]">"{v}"</div>
+                        <div className="text-[9px] text-white/50 mt-0.5">{d}</div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                {/* Tips */}
+                <section className="bg-[#39ff14]/5 border border-[#39ff14]/15 rounded-xl p-4">
+                  <h3 className="text-[10px] font-black uppercase tracking-widest text-[#39ff14] mb-2">Tips</h3>
+                  <ul className="flex flex-col gap-1.5 text-[9px] text-white/60">
+                    <li>→ Agrega artistas de tu colección a las fases — la IA los reconoce por nombre de archivo</li>
+                    <li>→ Para géneros sin artistas conocidos, describe la huella sonora (ritmo, bajos, mood)</li>
+                    <li>→ Si el BPM de tus tracks es siempre el mismo, puedes omitir las reglas entre fases</li>
+                    <li>→ El prompt se guarda automáticamente en localStorage — no se pierde al recargar</li>
+                    <li>→ Puedes tener un prompt por género: guarda varios en un archivo .txt y copia-pega</li>
+                    <li>→ El campo "advice" que devuelve la IA aparece en pantalla durante la transición</li>
+                  </ul>
+                </section>
+
+              </div>
+
+              {/* Footer */}
+              <div className="px-6 py-3 border-t border-white/5 bg-[#111] flex justify-end">
+                <button
+                  onClick={() => setShowPromptGuide(false)}
+                  className="px-4 py-1.5 bg-[#39ff14]/15 border border-[#39ff14]/30 text-[#39ff14] text-[9px] font-black uppercase tracking-widest rounded-lg hover:bg-[#39ff14]/25 transition-all"
+                >Entendido</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
