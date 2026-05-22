@@ -528,29 +528,39 @@ export default function App() {
   const [directorPrompt, setDirectorPrompt] = useState(`Eres el "Director Automático", un DJ Headliner experto curando una sesión de Bass Music. Tu único output es JSON válido sin markdown.
 
 El sistema ya analizó ambas pistas con IA multimodal y te entrega:
-- Nombre, BPM y Key de cada deck
-- AUDIO_PROFILE: género, mood, instrumentos, vocalPresence, energyArc, bassWeight, técnicas ideales de entrada/salida
+- Nombre, BPM (con etiqueta [detector] o [AI-corregido]) y Key
+- AUDIO_PROFILE: phase(1-4), realBpm, genre, mood, instruments, vocalPresence, energyArc, bassWeight, técnicas ideales
 - CHORD_MAP: progresión de acordes por segmentos de 2 compases
 - HARMONIC_MIX_POINTS: mejores momentos de cruce por compatibilidad armónica (score 0-100%)
+
+══ PRIORIDAD DE DATOS ══
+
+1. AUDIO_PROFILE.phase — ya clasifica la pista por escucha de IA, úsala DIRECTAMENTE
+2. AUDIO_PROFILE.realBpm — BPM estimado por escucha (más fiable que el detector si dice [detector])
+3. Si BPM="desconocido" o phase no disponible — clasifica por huella sonora (ver abajo)
 
 ══ DICCIONARIO DE FASES ══
 
 FASE 1 — Pantano Técnico (Halftime/Neurohop, 85-110 BPM)
+Huella sonora: ritmo en contratiempo, sub-bajos profundos y lentos, kicks esporádicos, atmósfera oscura y técnica
 Artistas: Ekcle, Poseidon, Proxima, Xsetra, Kursa & Seppa, Noisia, Audeka & Rawtekk, Vorso, mindvacy, COPYCATT, Frequent, RUN DMT, Skope
 Técnica: "cut" (agresivo) o "echo_out" — NUNCA "blend" (sub-bajos colisionan)
 Params: transitionDuration 8, bassSwapBeat 4, energy "drop", mixPoint "early_cut" o "mid_break"
 
 FASE 2 — El Puente Táctico (Breakbeat/Cinematic, ~130 BPM)
+Huella sonora: breakbeat sincopado, elementos orquestales o cinematográficos, sensación de transición entre mundos
 Artistas: Energy Airforce Soundtrack
 Técnica: "filter_sweep" — barre la capa inferior y abre el espacio
 Params: transitionDuration 16, bassSwapBeat 8, energy "boost", mixPoint "post_drop"
 
 FASE 3 — Vuelo Eufórico (Liquid/Soulful D&B, 170-174 BPM)
+Huella sonora: líneas de bajo melódicas y ligeras, pads eufóricos, voces soulful, sensación de elevación y vuelo
 Artistas: Artificial Intelligence, Technimatic, Halogenix, Makoto, 4hero, DJ Marky & SOLAH, MC Conrad
 Técnica: "blend" — cruza acordes y pads con igual potencia, sin cortes bruscos
 Params: transitionDuration 32, bassSwapBeat 16, energy "maintain", mixPoint "outro"
 
 FASE 4 — Peak Time & Cierre (Rollers/Dancefloor, 174-175 BPM)
+Huella sonora: kicks rápidos y duros, bajos rodantes ("rollers"), energía dancefloor constante y sin descanso
 Artistas: Influx Datum, High Contrast, Fred V, Inja x Whiney, L-Side & MC Fats, Alibi, DJ Marky, S.P.Y, DJ Fresh, Lenny Fontana
 Técnica: "filter_sweep" agresivo o "blend" — energía DEBE subir
 Params: transitionDuration 16-24, bassSwapBeat 8, energy "boost", mixPoint "post_drop" o "outro"
@@ -1680,8 +1690,8 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
         // Inject the cached audio profiles built when each track was loaded.
         // The Director thus knows the actual genre/mood/energy/instruments — not just BPM and filename.
         const fmtProfile = (p?: AiTrackProfile) => p
-          ? `genre=${p.genre}, mood=${p.mood}, instruments=[${p.instruments.join(',')}], vocals=${p.vocalPresence}, energyArc=${p.energyArc}, bass=${p.bassWeight}, phase=${p.phase}, idealMixIn=${p.mixInTechnique}, idealMixOut=${p.mixOutTechnique}, notes="${p.notes}"`
-          : 'profile=unavailable (use BPM + name only)';
+          ? `phase=${p.phase}, realBpm=${p.realBpm}, genre=${p.genre}, mood=${p.mood}, instruments=[${p.instruments.join(',')}], vocals=${p.vocalPresence}, energyArc=${p.energyArc}, bass=${p.bassWeight}, idealMixIn=${p.mixInTechnique}, idealMixOut=${p.mixOutTechnique}, notes="${p.notes}"`
+          : 'profile=unavailable (clasifica solo por BPM + nombre)';
 
         // --- HARMONIC CONTEXT: chord progressions + best mix points ---
         const fmtChords = (chords?: ChordSegment[]) => {
@@ -1707,11 +1717,15 @@ Responde SOLO el JSON, sin markdown, sin texto extra:
           model: 'gemini-2.0-flash',
           contents: `${directorPrompt}
 
-DECK A (saliendo): "${fromDeck.trackName}", ${fromDeck.bpm.toFixed(1)} BPM, Key ${fromDeck.key || 'unknown'}
+DECK A (saliendo): "${fromDeck.trackName}"
+  BPM: ${fromDeck.bpm > 0 ? `${fromDeck.bpm.toFixed(1)} ${fromDeck.aiProfile?.realBpm && Math.abs(fromDeck.aiProfile.realBpm - fromDeck.bpm) > 2 ? '[AI-corregido]' : '[detector]'}` : 'desconocido — usa AUDIO_PROFILE.realBpm'}
+  Key: ${fromDeck.key || 'desconocida'}
   AUDIO_PROFILE_A: ${fmtProfile(fromDeck.aiProfile)}
   CHORD_MAP_A: ${fmtChords(fromDeck.chordMap)}
 
-DECK B (entrando): "${toDeck.trackName}", ${toDeck.bpm.toFixed(1)} BPM, Key ${toDeck.key || 'unknown'}
+DECK B (entrando): "${toDeck.trackName}"
+  BPM: ${toDeck.bpm > 0 ? `${toDeck.bpm.toFixed(1)} ${toDeck.aiProfile?.realBpm && Math.abs(toDeck.aiProfile.realBpm - toDeck.bpm) > 2 ? '[AI-corregido]' : '[detector]'}` : 'desconocido — usa AUDIO_PROFILE.realBpm'}
+  Key: ${toDeck.key || 'desconocida'}
   AUDIO_PROFILE_B: ${fmtProfile(toDeck.aiProfile)}
   CHORD_MAP_B: ${fmtChords(toDeck.chordMap)}
 
